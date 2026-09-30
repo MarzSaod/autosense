@@ -1,0 +1,88 @@
+const gallery = [
+  {
+    id: 1,
+    image_url: '/gallery/shop-exterior.jpg',
+    caption: 'Shop Exterior',
+    category: 'Shop',
+    display_order: 1,
+  },
+  {
+    id: 2,
+    image_url: '/gallery/bay-1.jpg',
+    caption: 'Bay 1',
+    category: 'Bays',
+    display_order: 2,
+  },
+  {
+    id: 3,
+    image_url: '/gallery/bay-2.jpg',
+    caption: 'Bay 2',
+    category: 'Bays',
+    display_order: 3,
+  },
+  {
+    id: 4,
+    image_url: '/gallery/lift.jpg',
+    caption: 'Lift',
+    category: 'Bays',
+    display_order: 4,
+  },
+  {
+    id: 5,
+    image_url: '/gallery/tools.jpg',
+    caption: 'Tools',
+    category: 'Bays',
+    display_order: 5,
+  },
+  {
+    id: 6,
+    image_url: '/gallery/team.jpg',
+    caption: 'Our Team',
+    category: 'Team',
+    display_order: 6,
+  },
+  {
+    id: 7,
+    image_url: '/gallery/reception.jpg',
+    caption: 'Reception',
+    category: 'Shop',
+    display_order: 7,
+  },
+  {
+    id: 8,
+    image_url: '/gallery/waiting-area.jpg',
+    caption: 'Waiting Area',
+    category: 'Waiting Area',
+    display_order: 8,
+  },
+  {
+    id: 9,
+    image_url: '/gallery/before.jpg',
+    caption: 'Before',
+    category: 'Before & After',
+    display_order: 9,
+  },
+  {
+    id: 10,
+    image_url: '/gallery/after.jpg',
+    caption: 'After',
+    category: 'Before & After',
+    display_order: 10,
+  },
+  {
+    id: 11,
+    image_url: '/gallery/detail-1.jpg',
+    caption: 'Detail Work',
+    category: 'Before & After',
+    display_order: 11,
+  },
+  {
+    id: 12,
+    image_url: '/gallery/detail-2.jpg',
+    caption: 'Finished Job',
+    category: 'Before & After',
+    display_order: 12,
+  },
+]
+
+export default gallery
