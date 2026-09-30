@@ -94,7 +94,6 @@ function ContactForm() {
     <form onSubmit={handleSubmit} className="flex flex-col gap-6">
       <FormField id="contact-full-name" label="Full name" error={fieldError('fullName')}>
         <Input
-          placeholder="Jane Doe"
           value={values.fullName}
           onChange={(event) => handleChange('fullName', event.target.value)}
           onBlur={() => handleBlur('fullName')}
@@ -105,7 +104,6 @@ function ContactForm() {
       <FormField id="contact-email" label="Email address" error={fieldError('email')}>
         <Input
           type="email"
-          placeholder="jane@example.com"
           value={values.email}
           onChange={(event) => handleChange('email', event.target.value)}
           onBlur={() => handleBlur('email')}
