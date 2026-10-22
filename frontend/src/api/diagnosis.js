@@ -1,12 +1,33 @@
 import mockDiagnosticCodes from '../mocks/diagnosticCodes.js'
 import mockServices from '../mocks/services.js'
-import { toCamel, delay } from './client.js'
+import { API_BASE_URL, USE_MOCKS, toCamel, delay } from './client.js'
 
 function generateId() {
   return `diag_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
 export async function createDiagnosisRequest({ description = '', make, model, year } = {}) {
+  if (!USE_MOCKS) {
+    const response = await fetch(`${API_BASE_URL}/api/diagnosis`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description, make, model, year }),
+    })
+
+    const payload = await response.json()
+
+    if (!response.ok) {
+      throw new Error(payload.error || 'Something went wrong.')
+    }
+
+    const data = toCamel(payload)
+
+    return {
+      ...data,
+      matchedIssue: data.matchedCode?.description ?? 'General inspection recommended',
+    }
+  }
+
   await delay()
 
   const normalized = description.toLowerCase()

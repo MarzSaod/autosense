@@ -1,6 +1,6 @@
 export const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
-export const USE_MOCKS = true
+export const USE_MOCKS = false
 
 export function delay() {
   const ms = 300 + Math.random() * 300

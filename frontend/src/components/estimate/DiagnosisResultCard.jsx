@@ -18,6 +18,29 @@ function DiagnosisResultCard({ result, vehicle }) {
   const variants = useReducedMotionSafe(scaleIn)
   const isLowConfidence = result.confidence === 'low'
 
+  if (result.outOfContext) {
+    return (
+      <motion.div
+        variants={variants}
+        initial="hidden"
+        animate="visible"
+        className="rounded-xl shadow-card p-6 sm:p-8 bg-surface border border-line-strong"
+      >
+        <div className="flex items-center gap-3">
+          <span className="h-10 w-10 rounded-full flex items-center justify-center text-white shrink-0 bg-slate">
+            <Info className="h-5 w-5" />
+          </span>
+          <p className="font-bold text-navy">That doesn't look like a car problem.</p>
+        </div>
+
+        <p className="mt-4 text-slate">
+          Try describing what's going on with your vehicle, like a noise, a warning light, or
+          something that doesn't feel right when you drive.
+        </p>
+      </motion.div>
+    )
+  }
+
   const containerClasses = isLowConfidence
     ? 'bg-surface border border-line-strong'
     : 'bg-teal-soft border border-teal'
@@ -59,6 +82,11 @@ function DiagnosisResultCard({ result, vehicle }) {
           </p>
         </div>
       </div>
+
+      <p className="mt-3 text-sm text-muted">
+        This range covers everything from a minor check to a more involved repair within this
+        type of issue. Your mechanic will narrow it down once they take a look.
+      </p>
 
       <Button
         variant="dark"
