@@ -3,10 +3,18 @@ import cors from "cors";
 import "dotenv/config";
 import diagnosisRouter from "./routes/diagnosis.js";
 
-const allowedOrigins = (process.env.FRONTEND_ORIGIN || "http://localhost:5173")
+// Explicit CORS allowlist (no wildcard): local dev plus the live frontend.
+const defaultOrigins = [
+  "http://localhost:5173",
+  "https://autosense-phi.vercel.app",
+];
+
+const configuredOrigins = (process.env.FRONTEND_ORIGIN || "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
 
 const app = express();
 
