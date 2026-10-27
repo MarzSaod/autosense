@@ -7,7 +7,12 @@ const router = express.Router();
 
 const GENERAL_INSPECTION_SERVICE_ID = 8;
 
-const MIN_MATCH_RANK = 0.025;
+// Cover-density ranking (ts_rank_cd) scores a row by how many of the query's
+// terms it covers, so it does not shrink as the customer's description gets
+// longer the way ts_rank does. A row that matches a single term scores 0.1,
+// which is therefore the floor for "matched at all"; multi-term matches score
+// higher and sort above it.
+const MIN_MATCH_RANK = 0.1;
 
 const GEMINI_TIMEOUT_MS = 8000;
 
@@ -332,8 +337,10 @@ router.post("/", limiter, async (req, res, next) => {
                   suggested_service_id
              FROM diagnostic_codes
             WHERE search_vector @@ to_tsquery('english', $1)
-              AND ts_rank(search_vector, to_tsquery('english', $1)) >= $2
-            ORDER BY ts_rank(search_vector, to_tsquery('english', $1)) DESC, id ASC
+              AND ts_rank_cd(search_vector, to_tsquery('english', $1)) >= $2
+            ORDER BY ts_rank_cd(search_vector, to_tsquery('english', $1)) DESC,
+                     ts_rank(search_vector, to_tsquery('english', $1)) DESC,
+                     id ASC
             LIMIT 5`,
           [tsQuery, MIN_MATCH_RANK]
         )
