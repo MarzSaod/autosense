@@ -2,6 +2,10 @@ import express from "express";
 import cors from "cors";
 import "dotenv/config";
 import diagnosisRouter from "./routes/diagnosis.js";
+import servicesRouter from "./routes/services.js";
+import reviewsRouter from "./routes/reviews.js";
+import galleryRouter from "./routes/gallery.js";
+import shopSettingsRouter from "./routes/shopSettings.js";
 
 // Explicit CORS allowlist (no wildcard): local dev plus the live frontend.
 const defaultOrigins = [
@@ -42,6 +46,10 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/diagnosis", diagnosisRouter);
+app.use("/api/services", servicesRouter);
+app.use("/api/reviews", reviewsRouter);
+app.use("/api/gallery", galleryRouter);
+app.use("/api/shop-settings", shopSettingsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
