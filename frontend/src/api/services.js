@@ -1,13 +1,11 @@
-import mockServices from '../mocks/services.js'
-import { toCamel, delay } from './client.js'
+import { getJson, toCamel } from './client.js'
 
 export async function getServices() {
-  await delay()
-  return toCamel(mockServices.filter((service) => service.is_active))
+  return toCamel(await getJson('/api/services'))
 }
 
 export async function getServiceById(id) {
-  await delay()
-  const match = mockServices.find((service) => service.id === id)
-  return match ? toCamel(match) : null
+  const services = await getServices()
+  const match = services.find((service) => service.id === id)
+  return match || null
 }

@@ -1,20 +1,18 @@
-import mockReviews from '../mocks/reviews.js'
-import { toCamel, delay } from './client.js'
+import { getJson, toCamel } from './client.js'
 
 export async function getReviews() {
-  await delay()
-  return toCamel(mockReviews)
+  const payload = await getJson('/api/reviews')
+  return toCamel(payload.reviews)
 }
 
 export async function getFeaturedReviews() {
-  await delay()
-  return toCamel(mockReviews.filter((review) => review.is_featured))
+  const reviews = await getReviews()
+  return reviews.filter((review) => review.isFeatured)
 }
 
 export async function getRatingSummary() {
-  await delay()
-  const total = mockReviews.length
-  const sum = mockReviews.reduce((acc, review) => acc + review.rating, 0)
-  const average = total === 0 ? 0 : Math.round((sum / total) * 10) / 10
-  return { average, total }
+  const payload = await getJson('/api/reviews')
+  // The endpoint names the review count "count"; this function's callers
+  // expect "total", so keep returning it under that key.
+  return { average: payload.summary.average, total: payload.summary.count }
 }

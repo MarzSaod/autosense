@@ -1,22 +1,21 @@
-import mockGallery from '../mocks/gallery.js'
-import { toCamel, delay } from './client.js'
+import { getJson, toCamel } from './client.js'
 
-function sortedGallery() {
-  return [...mockGallery].sort((a, b) => a.display_order - b.display_order)
-}
-
-export async function getGalleryImages() {
-  await delay()
-  return toCamel(sortedGallery())
+export async function getGalleryImages(category) {
+  const path = category
+    ? `/api/gallery?category=${encodeURIComponent(category)}`
+    : '/api/gallery'
+  return toCamel(await getJson(path))
 }
 
 export async function getGalleryCategories() {
-  await delay()
+  const images = await getJson('/api/gallery')
   const categories = []
-  sortedGallery().forEach((item) => {
-    if (!categories.includes(item.category)) {
-      categories.push(item.category)
+
+  images.forEach((image) => {
+    if (image.category && !categories.includes(image.category)) {
+      categories.push(image.category)
     }
   })
+
   return categories
 }
