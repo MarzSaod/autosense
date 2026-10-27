@@ -18,6 +18,11 @@ const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
 
 const app = express();
 
+// Railway puts exactly one reverse proxy in front of the app, which sets
+// X-Forwarded-For. Trusting that single hop lets express-rate-limit key on the
+// visitor's real IP instead of rejecting the header as unexpected.
+app.set("trust proxy", 1);
+
 app.use(
   cors({
     origin(origin, callback) {
