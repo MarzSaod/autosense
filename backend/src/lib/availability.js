@@ -24,7 +24,147 @@ export const BOOKING_BUFFER_MINUTES = 60;
 // The shop is a single physical location in State College, PA. The server may
 // run anywhere (Railway runs in UTC), so "today" and "has this time passed"
 // must be evaluated in the shop's own timezone, not the server's.
-const SHOP_TIME_ZONE = process.env.SHOP_TIME_ZONE || "America/New_York";
+export const DEFAULT_SHOP_TIME_ZONE = "America/New_York";
+
+const CONFIGURED_SHOP_TIME_ZONE =
+  process.env.SHOP_TIME_ZONE || DEFAULT_SHOP_TIME_ZONE;
+
+// Zones that genuinely sit at UTC+0 all year. The divergence probe below would
+// otherwise flag them as a broken runtime.
+const UTC_EQUIVALENT_ZONES = new Set(
+  [
+    "UTC",
+    "GMT",
+    "Etc/UTC",
+    "Etc/GMT",
+    "Etc/Greenwich",
+    "Universal",
+    "Zulu",
+    "Africa/Abidjan",
+    "Atlantic/Reykjavik",
+  ].map((zone) => zone.toLowerCase())
+);
+
+const SHOP_TIME_ZONE_PARTS = {
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+};
+
+/**
+ * Build the shop's date formatter, refusing to start if the runtime cannot
+ * actually honour the requested zone.
+ *
+ * A container without IANA timezone data is the dangerous case: every slot
+ * comparison silently shifts by the UTC offset, so "has this time passed"
+ * quietly produces wrong answers instead of erroring. Node normally throws a
+ * RangeError for a zone it cannot resolve, but that is not guaranteed across
+ * every build and ICU configuration, so this checks the result as well as the
+ * construction, and throws rather than serving availability it cannot trust.
+ */
+function buildShopFormatter(timeZone) {
+  if (typeof Intl?.DateTimeFormat !== "function") {
+    throw new Error(
+      "This Node build has no Intl.DateTimeFormat, so the shop's timezone " +
+        "cannot be resolved. Availability would silently use UTC. Use a Node " +
+        "build with full ICU."
+    );
+  }
+
+  let formatter;
+  try {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      ...SHOP_TIME_ZONE_PARTS,
+    });
+  } catch (error) {
+    throw new Error(
+      `Shop timezone "${timeZone}" could not be resolved by this runtime ` +
+        `(${error.message}). Set SHOP_TIME_ZONE to a valid IANA zone and make ` +
+        "sure the image ships timezone data (tzdata / full-icu)."
+    );
+  }
+
+  // A runtime missing zone data can accept the name and then resolve it to
+  // UTC. ICU also legitimately canonicalises aliases (Etc/UTC -> UTC,
+  // Asia/Calcutta -> Asia/Kolkata), so only a slide to UTC from a zone that is
+  // not itself UTC counts as a failure.
+  const resolved = formatter.resolvedOptions().timeZone;
+  if (!resolved) {
+    throw new Error(
+      `Shop timezone "${timeZone}" resolved to no zone at all. This runtime is ` +
+        "missing timezone data, and availability would be computed against the " +
+        "wrong clock."
+    );
+  }
+  if (
+    !UTC_EQUIVALENT_ZONES.has(timeZone.toLowerCase()) &&
+    UTC_EQUIVALENT_ZONES.has(resolved.toLowerCase())
+  ) {
+    throw new Error(
+      `Shop timezone "${timeZone}" resolved to "${resolved}" instead. This ` +
+        "runtime is missing timezone data, and availability would be computed " +
+        "against the wrong clock."
+    );
+  }
+
+  // Checked against the resolved name, because supportedValuesOf lists only
+  // canonical zones. It also omits UTC and the Etc/* zones entirely by spec,
+  // so a zone that resolves to UTC is exempt from this check and is covered by
+  // the UTC-divergence probe below instead.
+  if (
+    !UTC_EQUIVALENT_ZONES.has(resolved.toLowerCase()) &&
+    typeof Intl.supportedValuesOf === "function" &&
+    !Intl.supportedValuesOf("timeZone").some(
+      (zone) => zone.toLowerCase() === resolved.toLowerCase()
+    )
+  ) {
+    throw new Error(
+      `Shop timezone "${timeZone}" (resolved as "${resolved}") is not in this ` +
+        "runtime's timezone database. The image is missing tzdata / full ICU."
+    );
+  }
+
+  // Last net: a runtime that renders every zone as UTC. Probe midwinter and
+  // midsummer so a zone that merely happens to sit at UTC+0 for half the year
+  // (Europe/London, say) is not mistaken for a broken runtime.
+  if (!UTC_EQUIVALENT_ZONES.has(timeZone.toLowerCase())) {
+    const utcFormatter = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "UTC",
+      ...SHOP_TIME_ZONE_PARTS,
+    });
+    const probes = [
+      new Date("2026-01-15T12:00:00Z"),
+      new Date("2026-07-15T12:00:00Z"),
+    ];
+    if (
+      probes.every((probe) => formatter.format(probe) === utcFormatter.format(probe))
+    ) {
+      throw new Error(
+        `Shop timezone "${timeZone}" renders identically to UTC all year, so ` +
+          "this runtime is falling back to UTC instead of applying the zone. " +
+          "The image is missing timezone data."
+      );
+    }
+  }
+
+  return formatter;
+}
+
+// Validated once, at import, so a container without timezone data fails at
+// boot with the message above rather than quietly serving wrong availability.
+const shopFormatter = buildShopFormatter(CONFIGURED_SHOP_TIME_ZONE);
+
+export const SHOP_TIME_ZONE = CONFIGURED_SHOP_TIME_ZONE;
+
+// Whether the zone came from the environment or from the built-in default.
+// Logged at startup so production never leaves it ambiguous.
+export const SHOP_TIME_ZONE_SOURCE = process.env.SHOP_TIME_ZONE
+  ? "SHOP_TIME_ZONE environment variable"
+  : "built-in default (SHOP_TIME_ZONE is not set)";
 
 // Bookings in these states still occupy their slot. Cancelled ones free it up.
 const BLOCKING_STATUSES = ["pending", "confirmed", "completed"];
@@ -52,15 +192,7 @@ export function formatDateKey(year, month, day) {
 
 // The current date and time as the shop experiences it.
 export function shopNow() {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: SHOP_TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  })
+  const parts = shopFormatter
     .formatToParts(new Date())
     .reduce((acc, part) => {
       acc[part.type] = part.value;

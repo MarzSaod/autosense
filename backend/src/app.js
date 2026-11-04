@@ -8,6 +8,11 @@ import galleryRouter from "./routes/gallery.js";
 import shopSettingsRouter from "./routes/shopSettings.js";
 import availabilityRouter from "./routes/availability.js";
 import bookingsRouter from "./routes/bookings.js";
+import {
+  SHOP_TIME_ZONE,
+  SHOP_TIME_ZONE_SOURCE,
+  shopNow,
+} from "./lib/availability.js";
 
 // Explicit CORS allowlist (no wildcard): local dev plus the live frontend.
 const defaultOrigins = [
@@ -44,7 +49,21 @@ app.use(
 app.use(express.json());
 
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
+  // The shop clock is reported here so the timezone the deployed container is
+  // actually using can be checked from outside, without shell access. A
+  // mismatch between shop_now and server_utc_now is the signature of the
+  // container losing its timezone data.
+  const now = shopNow();
+
+  res.json({
+    status: "ok",
+    shop_time_zone: SHOP_TIME_ZONE,
+    shop_time_zone_source: SHOP_TIME_ZONE_SOURCE,
+    shop_now: `${now.dateKey} ${String(Math.floor(now.minutes / 60)).padStart(2, "0")}:${String(
+      now.minutes % 60
+    ).padStart(2, "0")}`,
+    server_utc_now: new Date().toISOString(),
+  });
 });
 
 app.use("/api/diagnosis", diagnosisRouter);

@@ -1,7 +1,8 @@
+import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import Button from '../ui/Button.jsx'
 import { Check } from '../ui/Icon.jsx'
-import { scaleIn, useReducedMotionSafe } from '../../motion/presets.js'
+import { scaleIn, useReducedMotionSafe, usePrefersReducedMotion } from '../../motion/presets.js'
 
 function formatLongDate(dateKey) {
   const [year, month, day] = dateKey.split('-').map(Number)
@@ -19,6 +20,15 @@ function formatTimeLabel(time24) {
 
 function BookingConfirmation({ confirmation, serviceNames, onBookAnother }) {
   const variants = useReducedMotionSafe(scaleIn)
+  const prefersReducedMotion = usePrefersReducedMotion()
+
+  // Confirming swaps the form for this view in place, on the same /booking
+  // route. ScrollToTop only fires on a pathname change, so without this the
+  // customer is left wherever they had scrolled to when they pressed Confirm,
+  // which is usually the bottom of a long form.
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' })
+  }, [prefersReducedMotion])
 
   return (
     <div className="max-w-[560px] mx-auto flex flex-col items-center text-center gap-4">
