@@ -33,16 +33,23 @@ export async function getAvailability(dateString, serviceIds = []) {
 /**
  * Which days of a calendar month have at least one open slot.
  *
- * `month` is 1-12. Returns [{ date, isOpen, isAvailable, openSlotCount }] for
- * every day of the month: isOpen is false when the shop does not open that
- * weekday at all, and isAvailable is false when nothing is left to book
- * (closed, fully booked, or the whole day is in the past).
+ * `month` is 1-12. Resolves to { shopToday, days }:
+ *
+ *  - `days` is [{ date, isOpen, isAvailable, openSlotCount }] for every day of
+ *    the month. isOpen is false when the shop does not open that weekday at
+ *    all, and isAvailable is false when nothing is left to book (closed, fully
+ *    booked, or the whole day is in the past).
+ *  - `shopToday` is the shop's own current date as "YYYY-MM-DD". The calendar
+ *    uses it instead of the device clock to decide what counts as past, since
+ *    a visitor east of Eastern time is already on the next date while the shop
+ *    is still open today.
  */
 export async function getMonthAvailability(year, month, serviceIds = []) {
   const payload = await getJson(
     `/api/availability/month?year=${year}&month=${month}${buildServiceIdsParam(serviceIds)}`,
   )
-  return toCamel(payload).days
+  const { shopToday, days } = toCamel(payload)
+  return { shopToday, days }
 }
 
 /**

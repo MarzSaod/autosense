@@ -13,8 +13,11 @@ function formatDateKey(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-function startOfDay(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+// "2026-11-04" -> { year: 2026, month: 10, day: 4 }. month is 0-based to match
+// the Date constructor used for the grid cells.
+function parseDateKey(key) {
+  const [year, month, day] = key.split('-').map(Number)
+  return { year, month: month - 1, day }
 }
 
 function getMonthCells(year, month) {
@@ -44,14 +47,48 @@ function getMonthCells(year, month) {
 }
 
 function Calendar({ selectedDate, onSelectDate, serviceIds = [], refreshKey = 0 }) {
-  const today = useMemo(() => startOfDay(new Date()), [])
-  const [viewMonth, setViewMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
+  // The shop's own current date ("YYYY-MM-DD"), from the month endpoint. This
+  // is what decides which days are past, which day gets the "today" ring, and
+  // how far back the month navigation goes. The device clock cannot answer
+  // that: a visitor east of Eastern time is already on tomorrow's date while
+  // the shop is still open today, which used to grey out the shop's real
+  // current day and hide same-day slots it would still accept.
+  const [shopToday, setShopToday] = useState(null)
+  // Which month is on screen. Seeded from the device clock purely so the grid
+  // has something to render before the first response; corrected below once
+  // the shop's date arrives.
+  const [viewMonth, setViewMonth] = useState(() => {
+    const deviceNow = new Date()
+    return new Date(deviceNow.getFullYear(), deviceNow.getMonth(), 1)
+  })
   // date key -> { isOpen, isAvailable, openSlotCount } from the backend.
   const [monthDays, setMonthDays] = useState(new Map())
 
+  const shopTodayParts = useMemo(
+    () => (shopToday ? parseDateKey(shopToday) : null),
+    [shopToday],
+  )
+
+  // If the device's month is behind the shop's (a visitor west of Eastern on
+  // the last day of a month), the seeded view would start on a month that is
+  // entirely in the past. Derive the month actually shown rather than storing
+  // the correction, so there is one source of truth for what is on screen.
+  const shownMonth = useMemo(() => {
+    if (!shopTodayParts) {
+      return viewMonth
+    }
+    const isBeforeShopMonth =
+      viewMonth.getFullYear() < shopTodayParts.year ||
+      (viewMonth.getFullYear() === shopTodayParts.year &&
+        viewMonth.getMonth() < shopTodayParts.month)
+    return isBeforeShopMonth
+      ? new Date(shopTodayParts.year, shopTodayParts.month, 1)
+      : viewMonth
+  }, [viewMonth, shopTodayParts])
+
   const cells = useMemo(
-    () => getMonthCells(viewMonth.getFullYear(), viewMonth.getMonth()),
-    [viewMonth],
+    () => getMonthCells(shownMonth.getFullYear(), shownMonth.getMonth()),
+    [shownMonth],
   )
 
   // Stable identity for the selected services, so the month request re-runs
@@ -70,13 +107,16 @@ function Calendar({ selectedDate, onSelectDate, serviceIds = [], refreshKey = 0 
 
     async function loadMonth() {
       try {
-        const days = await getMonthAvailability(
-          viewMonth.getFullYear(),
-          viewMonth.getMonth() + 1,
+        const { shopToday: currentShopDate, days } = await getMonthAvailability(
+          shownMonth.getFullYear(),
+          shownMonth.getMonth() + 1,
           stableServiceIds,
         )
         if (!cancelled) {
           setMonthDays(new Map(days.map((day) => [day.date, day])))
+          if (currentShopDate) {
+            setShopToday(currentShopDate)
+          }
         }
       } catch {
         if (!cancelled) {
@@ -90,26 +130,29 @@ function Calendar({ selectedDate, onSelectDate, serviceIds = [], refreshKey = 0 
     return () => {
       cancelled = true
     }
-  }, [viewMonth, stableServiceIds, refreshKey])
+  }, [shownMonth, stableServiceIds, refreshKey])
 
-  const isAtEarliestMonth =
-    viewMonth.getFullYear() === today.getFullYear() && viewMonth.getMonth() === today.getMonth()
+  // Before the shop's date is known, keep the back button closed rather than
+  // letting the visitor page into months that may turn out to be past.
+  const isAtEarliestMonth = shopTodayParts
+    ? shownMonth.getFullYear() === shopTodayParts.year &&
+      shownMonth.getMonth() === shopTodayParts.month
+    : true
 
   function goToPrevMonth() {
-    setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
+    setViewMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() - 1, 1))
   }
 
   function goToNextMonth() {
-    setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
+    setViewMonth(new Date(shownMonth.getFullYear(), shownMonth.getMonth() + 1, 1))
   }
 
   // Until the month's availability arrives, days are left clickable rather
   // than flashing as disabled.
   const monthLoaded = monthDays.size > 0
 
-  const monthLabel = viewMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  const monthLabel = shownMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
   const selectedKey = selectedDate ? formatDateKey(selectedDate) : null
-  const todayKey = formatDateKey(today)
 
   return (
     <div
@@ -150,12 +193,15 @@ function Calendar({ selectedDate, onSelectDate, serviceIds = [], refreshKey = 0 
         {cells.map((cell) => {
           const key = formatDateKey(cell.date)
           const dayInfo = monthDays.get(key)
-          const isPast = cell.date < today
+          // Plain string comparison: both sides are YYYY-MM-DD, which sorts
+          // chronologically. Until the shop's date arrives nothing is treated
+          // as past, rather than guessing from the device clock.
+          const isPast = shopToday ? key < shopToday : false
           const isClosed = dayInfo ? !dayInfo.isOpen : false
           // Open that weekday, but nothing left to book.
           const isFullyBooked = Boolean(dayInfo?.isOpen) && !dayInfo.isAvailable && !isPast
           const isSelected = cell.inMonth && key === selectedKey
-          const isToday = cell.inMonth && key === todayKey
+          const isToday = cell.inMonth && key === shopToday
           const hasAvailability = Boolean(dayInfo?.isAvailable)
           const disabled =
             !cell.inMonth || isPast || (monthLoaded && (isClosed || !hasAvailability))

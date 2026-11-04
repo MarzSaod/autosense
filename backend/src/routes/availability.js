@@ -3,6 +3,7 @@ import {
   computeDaySlots,
   formatDateKey,
   isValidDateKey,
+  shopNow,
 } from "../lib/availability.js";
 import {
   loadBookingsByDate,
@@ -20,6 +21,13 @@ const router = express.Router();
  * closed, a day already fully booked, and a day entirely in the past all come
  * back with is_available = false; is_open distinguishes "closed that weekday"
  * from "open but nothing left", which is what the calendar strikes through.
+ *
+ * The response also carries shop_today, the shop's own current calendar date.
+ * The calendar needs it to decide which days are past and which day gets the
+ * "today" ring: the visitor's device clock cannot answer that, because a
+ * visitor far enough east is already on tomorrow's date while the shop is
+ * still open today. It rides along here rather than in a second request,
+ * since the calendar already calls this endpoint for every month it renders.
  */
 router.get("/month", async (req, res, next) => {
   try {
@@ -86,6 +94,7 @@ router.get("/month", async (req, res, next) => {
       year,
       month,
       duration_minutes: durationMinutes,
+      shop_today: shopNow().dateKey,
       days,
     });
   } catch (error) {
