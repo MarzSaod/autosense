@@ -13,6 +13,42 @@ export async function getJson(path) {
   return payload
 }
 
+/**
+ * An error carrying the HTTP status and the structured parts of the backend's
+ * error payload, so callers can tell a validation failure (400) from a slot
+ * that was taken while the customer was filling in the form (409).
+ */
+export class ApiError extends Error {
+  constructor(message, { status, field, fieldMessage, reason } = {}) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.field = field
+    this.fieldMessage = fieldMessage
+    this.reason = reason
+  }
+}
+
+export async function postJson(path, body) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const payload = await response.json().catch(() => null)
+
+  if (!response.ok) {
+    throw new ApiError(payload?.error || 'Something went wrong.', {
+      status: response.status,
+      field: payload?.field,
+      fieldMessage: payload?.fieldMessage,
+      reason: payload?.reason,
+    })
+  }
+
+  return payload
+}
+
 export function delay() {
   const ms = 300 + Math.random() * 300
   return new Promise((resolve) => setTimeout(resolve, ms))

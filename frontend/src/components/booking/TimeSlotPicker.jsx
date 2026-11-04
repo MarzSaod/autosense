@@ -24,11 +24,14 @@ function formatTimeLabel(time24) {
   return `${displayHour}:${minuteStr} ${period}`
 }
 
-function TimeSlotPicker({ date, time, onSelectTime }) {
+function TimeSlotPicker({ date, time, onSelectTime, serviceIds = [], refreshKey = 0 }) {
   const dateKey = date ? formatDateKey(date) : null
+  // The backend sizes each slot against the selected services' real durations,
+  // and blocks times that have already passed when the date is today.
+  const serviceIdsKey = serviceIds.join(',')
   const { data: slots, loading, error, refetch } = useApi(
-    () => (dateKey ? getAvailability(dateKey) : Promise.resolve([])),
-    [dateKey],
+    () => (dateKey ? getAvailability(dateKey, serviceIds) : Promise.resolve([])),
+    [dateKey, serviceIdsKey, refreshKey],
   )
 
   const title = date ? `Pick a time, ${formatShortDate(date)}` : 'Pick a time'

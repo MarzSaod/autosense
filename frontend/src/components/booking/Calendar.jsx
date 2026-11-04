@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import BookingSectionHeader from './BookingSectionHeader.jsx'
 import { ChevronLeft, ChevronRight } from '../ui/Icon.jsx'
-import { getShopSettings } from '../../api/shop.js'
-import { getAvailability } from '../../api/bookings.js'
-import useApi from '../../hooks/useApi.js'
+import { getMonthAvailability } from '../../api/bookings.js'
 
 const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
-const WEEKDAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
 
 function pad(value) {
   return String(value).padStart(2, '0')
@@ -46,59 +43,54 @@ function getMonthCells(year, month) {
   return cells
 }
 
-function Calendar({ selectedDate, onSelectDate }) {
+function Calendar({ selectedDate, onSelectDate, serviceIds = [], refreshKey = 0 }) {
   const today = useMemo(() => startOfDay(new Date()), [])
   const [viewMonth, setViewMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
-  const [fullyBookedDates, setFullyBookedDates] = useState(new Set())
-  const { data: shopSettings } = useApi(getShopSettings, [])
-
-  const closedWeekdays = useMemo(() => {
-    if (!shopSettings?.hoursJson) {
-      return []
-    }
-    return WEEKDAY_KEYS.reduce((acc, key, index) => {
-      if (!shopSettings.hoursJson[key]) {
-        acc.push(index)
-      }
-      return acc
-    }, [])
-  }, [shopSettings])
+  // date key -> { isOpen, isAvailable, openSlotCount } from the backend.
+  const [monthDays, setMonthDays] = useState(new Map())
 
   const cells = useMemo(
     () => getMonthCells(viewMonth.getFullYear(), viewMonth.getMonth()),
     [viewMonth],
   )
 
+  // Stable identity for the selected services, so the month request re-runs
+  // when the selection actually changes rather than on every parent render.
+  const serviceIdsKey = serviceIds.join(',')
+  const stableServiceIds = useMemo(
+    () => (serviceIdsKey ? serviceIdsKey.split(',').map(Number) : []),
+    [serviceIdsKey],
+  )
+
+  // One request per month: the backend works out, for every day, whether the
+  // shop opens that weekday and whether any slot is still open for the
+  // selected services.
   useEffect(() => {
     let cancelled = false
 
-    async function loadFullyBooked() {
-      const candidates = cells
-        .filter((cell) => cell.inMonth)
-        .map((cell) => cell.date)
-        .filter((date) => date >= today)
-        .filter((date) => !closedWeekdays.includes(date.getDay()))
-
-      const results = await Promise.all(
-        candidates.map(async (date) => {
-          const key = formatDateKey(date)
-          const slots = await getAvailability(key)
-          const isFull = slots.length > 0 && slots.every((slot) => !slot.isAvailable)
-          return [key, isFull]
-        }),
-      )
-
-      if (!cancelled) {
-        setFullyBookedDates(new Set(results.filter(([, full]) => full).map(([key]) => key)))
+    async function loadMonth() {
+      try {
+        const days = await getMonthAvailability(
+          viewMonth.getFullYear(),
+          viewMonth.getMonth() + 1,
+          stableServiceIds,
+        )
+        if (!cancelled) {
+          setMonthDays(new Map(days.map((day) => [day.date, day])))
+        }
+      } catch {
+        if (!cancelled) {
+          setMonthDays(new Map())
+        }
       }
     }
 
-    loadFullyBooked()
+    loadMonth()
 
     return () => {
       cancelled = true
     }
-  }, [cells, closedWeekdays, today])
+  }, [viewMonth, stableServiceIds, refreshKey])
 
   const isAtEarliestMonth =
     viewMonth.getFullYear() === today.getFullYear() && viewMonth.getMonth() === today.getMonth()
@@ -110,6 +102,10 @@ function Calendar({ selectedDate, onSelectDate }) {
   function goToNextMonth() {
     setViewMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
   }
+
+  // Until the month's availability arrives, days are left clickable rather
+  // than flashing as disabled.
+  const monthLoaded = monthDays.size > 0
 
   const monthLabel = viewMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
   const selectedKey = selectedDate ? formatDateKey(selectedDate) : null
@@ -153,12 +149,16 @@ function Calendar({ selectedDate, onSelectDate }) {
 
         {cells.map((cell) => {
           const key = formatDateKey(cell.date)
+          const dayInfo = monthDays.get(key)
           const isPast = cell.date < today
-          const isClosed = closedWeekdays.includes(cell.date.getDay())
-          const isFullyBooked = fullyBookedDates.has(key)
+          const isClosed = dayInfo ? !dayInfo.isOpen : false
+          // Open that weekday, but nothing left to book.
+          const isFullyBooked = Boolean(dayInfo?.isOpen) && !dayInfo.isAvailable && !isPast
           const isSelected = cell.inMonth && key === selectedKey
           const isToday = cell.inMonth && key === todayKey
-          const disabled = !cell.inMonth || isPast || isClosed || isFullyBooked
+          const hasAvailability = Boolean(dayInfo?.isAvailable)
+          const disabled =
+            !cell.inMonth || isPast || (monthLoaded && (isClosed || !hasAvailability))
           const struckThrough = cell.inMonth && (isPast || isFullyBooked)
 
           const stateClasses = !cell.inMonth

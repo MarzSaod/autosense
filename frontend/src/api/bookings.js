@@ -1,74 +1,75 @@
-import mockShopSettings from '../mocks/shopSettings.js'
-import mockBookedSlots from '../mocks/bookedSlots.js'
-import { toCamel, delay } from './client.js'
+import { ApiError, getJson, postJson, toCamel } from './client.js'
 
-const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+// Thrown when the chosen slot filled up between the customer loading the time
+// picker and pressing Confirm. Callers check this to show "taken" rather than
+// "something went wrong".
+export const SLOT_TAKEN = 'slot_taken'
 
-function parseDateString(dateString) {
-  const [year, month, day] = dateString.split('-').map(Number)
-  return new Date(year, month - 1, day)
-}
-
-function buildTimeSlots(open, close, durationMinutes) {
-  const slots = []
-  const [openHour, openMinute] = open.split(':').map(Number)
-  const [closeHour, closeMinute] = close.split(':').map(Number)
-  const closeTotal = closeHour * 60 + closeMinute
-
-  let current = openHour * 60 + openMinute
-  while (current + durationMinutes <= closeTotal) {
-    const hour = Math.floor(current / 60)
-    const minute = current % 60
-    slots.push(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)
-    current += durationMinutes
+function buildServiceIdsParam(serviceIds) {
+  if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+    return ''
   }
-  return slots
+  return `&serviceIds=${encodeURIComponent(serviceIds.join(','))}`
 }
 
-function generateReferenceId() {
-  return `AS-${Date.now().toString(36).toUpperCase()}`
+/**
+ * Open time slots for one day, for the services the customer picked.
+ *
+ * Returns [{ date, time, isAvailable }] — one entry per slot on the shop's
+ * schedule, so taken times can be shown greyed out rather than vanishing.
+ * An empty array means the shop is closed that day.
+ *
+ * The backend decides availability: the shop's real hours for that weekday,
+ * how long the selected services take, collisions with existing bookings, and
+ * whether the slot has already passed when the date is today.
+ */
+export async function getAvailability(dateString, serviceIds = []) {
+  const payload = await getJson(
+    `/api/availability/day?date=${encodeURIComponent(dateString)}${buildServiceIdsParam(serviceIds)}`,
+  )
+  return toCamel(payload)
 }
 
-const BOOKING_BUFFER_MINUTES = 60
-
-function formatDateKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+/**
+ * Which days of a calendar month have at least one open slot.
+ *
+ * `month` is 1-12. Returns [{ date, isOpen, isAvailable, openSlotCount }] for
+ * every day of the month: isOpen is false when the shop does not open that
+ * weekday at all, and isAvailable is false when nothing is left to book
+ * (closed, fully booked, or the whole day is in the past).
+ */
+export async function getMonthAvailability(year, month, serviceIds = []) {
+  const payload = await getJson(
+    `/api/availability/month?year=${year}&month=${month}${buildServiceIdsParam(serviceIds)}`,
+  )
+  return toCamel(payload).days
 }
 
-export async function getAvailability(dateString) {
-  await delay()
-  const date = parseDateString(dateString)
-  const dayName = dayNames[date.getDay()]
-  const hours = mockShopSettings.hours_json[dayName]
-
-  if (!hours) {
-    return []
-  }
-
-  const times = buildTimeSlots(hours.open, hours.close, mockShopSettings.appointment_duration_minutes)
-  const now = new Date()
-  const isToday = dateString === formatDateKey(now)
-  const cutoffMinutes = now.getHours() * 60 + now.getMinutes() + BOOKING_BUFFER_MINUTES
-
-  return times.map((time) => {
-    const bookedCount = mockBookedSlots.filter(
-      (slot) => slot.date === dateString && slot.time === time,
-    ).length
-    const [hour, minute] = time.split(':').map(Number)
-    const hasPassed = isToday && hour * 60 + minute < cutoffMinutes
-    return toCamel({
-      date: dateString,
-      time,
-      is_available: !hasPassed && bookedCount < mockShopSettings.max_concurrent_appointments,
-    })
-  })
-}
-
+/**
+ * Save an appointment.
+ *
+ * Takes the same payload shape as before:
+ *   { serviceIds, vehicle: { make, model, year },
+ *     contact: { fullName, email, phone }, date, time, diagnosisRequestId? }
+ *
+ * Resolves to the created booking, camelCased, including referenceId,
+ * serviceIds, vehicle, contact, date and time.
+ *
+ * Rejects with an ApiError. When the slot was taken in the meantime the error's
+ * `reason` is SLOT_TAKEN, which is a different situation from a validation
+ * failure and worth a different message.
+ */
 export async function createBooking(payload) {
-  await delay()
-  return toCamel({
-    ...payload,
-    reference_id: generateReferenceId(),
-    status: 'pending',
-  })
+  try {
+    return toCamel(await postJson('/api/bookings', payload))
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      throw new ApiError(error.message, {
+        status: 409,
+        field: error.field,
+        reason: SLOT_TAKEN,
+      })
+    }
+    throw error
+  }
 }

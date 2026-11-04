@@ -13,7 +13,16 @@ function formatTimeLabel(time24) {
   return `${displayHour}:${minuteStr} ${period}`
 }
 
-function BookingSummary({ services, formState, date, time, canSubmit, submitting, onSubmit }) {
+function BookingSummary({
+  services,
+  formState,
+  date,
+  time,
+  canSubmit,
+  submitting,
+  submitError,
+  onSubmit,
+}) {
   const selectedServices = (services || []).filter((service) =>
     formState.serviceIds.includes(service.id),
   )
@@ -54,6 +63,12 @@ function BookingSummary({ services, formState, date, time, canSubmit, submitting
             </div>
           ))}
         </Card>
+      )}
+
+      {submitError && (
+        <p role="alert" className="mb-4 text-sm font-semibold text-red-600">
+          {submitError}
+        </p>
       )}
 
       <Button

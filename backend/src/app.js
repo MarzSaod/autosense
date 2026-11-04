@@ -6,6 +6,8 @@ import servicesRouter from "./routes/services.js";
 import reviewsRouter from "./routes/reviews.js";
 import galleryRouter from "./routes/gallery.js";
 import shopSettingsRouter from "./routes/shopSettings.js";
+import availabilityRouter from "./routes/availability.js";
+import bookingsRouter from "./routes/bookings.js";
 
 // Explicit CORS allowlist (no wildcard): local dev plus the live frontend.
 const defaultOrigins = [
@@ -50,6 +52,8 @@ app.use("/api/services", servicesRouter);
 app.use("/api/reviews", reviewsRouter);
 app.use("/api/gallery", galleryRouter);
 app.use("/api/shop-settings", shopSettingsRouter);
+app.use("/api/availability", availabilityRouter);
+app.use("/api/bookings", bookingsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });

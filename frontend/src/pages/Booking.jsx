@@ -10,7 +10,7 @@ import TimeSlotPicker from '../components/booking/TimeSlotPicker.jsx'
 import BookingSummary from '../components/booking/BookingSummary.jsx'
 import BookingConfirmation from '../components/booking/BookingConfirmation.jsx'
 import { getServices } from '../api/services.js'
-import { createBooking } from '../api/bookings.js'
+import { SLOT_TAKEN, createBooking } from '../api/bookings.js'
 import useApi from '../hooks/useApi.js'
 
 const CURRENT_YEAR = new Date().getFullYear()
@@ -102,6 +102,10 @@ function Booking() {
   const [time, setTime] = useState(null)
   const [status, setStatus] = useState('form')
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
+  // Bumped when a confirm loses a race, to force the pickers to re-read
+  // availability so the slot that was just taken stops showing as open.
+  const [availabilityVersion, setAvailabilityVersion] = useState(0)
   const [confirmation, setConfirmation] = useState(null)
 
   const { data: services } = useApi(getServices, [])
@@ -150,6 +154,12 @@ function Booking() {
   function handleSelectDate(nextDate) {
     setDate(nextDate)
     setTime(null)
+    setSubmitError(null)
+  }
+
+  function handleSelectTime(nextTime) {
+    setTime(nextTime)
+    setSubmitError(null)
   }
 
   function focusField(field) {
@@ -188,6 +198,7 @@ function Booking() {
     }
 
     setSubmitting(true)
+    setSubmitError(null)
 
     const payload = {
       serviceIds: formState.serviceIds,
@@ -202,10 +213,27 @@ function Booking() {
       ...(diagnosisRequestId ? { diagnosisRequestId } : {}),
     }
 
-    const response = await createBooking(payload)
-    setConfirmation(response)
-    setSubmitting(false)
-    setStatus('confirmed')
+    try {
+      const response = await createBooking(payload)
+      setConfirmation(response)
+      setStatus('confirmed')
+    } catch (error) {
+      // A slot taken in the meantime is not the customer's mistake: say so and
+      // send them back to the time picker, rather than showing a generic
+      // failure as if the form were wrong.
+      if (error?.reason === SLOT_TAKEN) {
+        setSubmitError(
+          'That time was just booked by someone else. Please pick another time.',
+        )
+        setTime(null)
+        setAvailabilityVersion((version) => version + 1)
+        focusField('time')
+      } else {
+        setSubmitError(error?.message || 'Something went wrong. Please try again.')
+      }
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   function resetBooking() {
@@ -214,6 +242,8 @@ function Booking() {
     setTouched({})
     setDate(null)
     setTime(null)
+    setSubmitError(null)
+    setAvailabilityVersion(0)
     setConfirmation(null)
     setStatus('form')
   }
@@ -277,8 +307,19 @@ function Booking() {
           </div>
 
           <div className="flex flex-col gap-10">
-            <Calendar selectedDate={date} onSelectDate={handleSelectDate} />
-            <TimeSlotPicker date={date} time={time} onSelectTime={setTime} />
+            <Calendar
+              selectedDate={date}
+              onSelectDate={handleSelectDate}
+              serviceIds={formState.serviceIds}
+              refreshKey={availabilityVersion}
+            />
+            <TimeSlotPicker
+              date={date}
+              time={time}
+              onSelectTime={handleSelectTime}
+              serviceIds={formState.serviceIds}
+              refreshKey={availabilityVersion}
+            />
           </div>
         </div>
 
@@ -289,6 +330,7 @@ function Booking() {
           time={time}
           canSubmit={canSubmit}
           submitting={submitting}
+          submitError={submitError}
           onSubmit={handleConfirm}
         />
       </Section>
