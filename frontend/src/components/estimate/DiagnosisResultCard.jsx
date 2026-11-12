@@ -41,6 +41,19 @@ function DiagnosisResultCard({ result, vehicle }) {
     )
   }
 
+  // Carries the estimate over to the booking page: the matched service arrives
+  // preselected, the vehicle fields prefilled, and diagnosisRequestId travels
+  // with the booking so the backend marks the estimate converted in the same
+  // transaction. A result with no suggested service still books; it just opens
+  // with nothing selected rather than an empty chip.
+  const bookingState = {
+    prefill: {
+      serviceIds: result.suggestedServiceId ? [result.suggestedServiceId] : [],
+      vehicle,
+      diagnosisRequestId: result.id,
+    },
+  }
+
   const containerClasses = isLowConfidence
     ? 'bg-surface border border-line-strong'
     : 'bg-teal-soft border border-teal'
@@ -93,13 +106,7 @@ function DiagnosisResultCard({ result, vehicle }) {
         as="link"
         to="/booking"
         className="w-full mt-6"
-        state={{
-          prefill: {
-            serviceIds: [result.suggestedServiceId],
-            vehicle,
-            diagnosisRequestId: result.id,
-          },
-        }}
+        state={bookingState}
       >
         Book This Service
       </Button>
