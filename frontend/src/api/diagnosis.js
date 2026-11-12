@@ -24,7 +24,13 @@ export async function createDiagnosisRequest({ description = '', make, model, ye
 
     return {
       ...data,
-      matchedIssue: data.matchedCode?.description ?? 'General inspection recommended',
+      // A keyword-matched result carries no diagnostic code (the dataset is
+      // powertrain only), so fall back to the matched service's name before
+      // calling it a general inspection.
+      matchedIssue:
+        data.matchedCode?.description ??
+        data.matchedService?.name ??
+        'General inspection recommended',
     }
   }
 

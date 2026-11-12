@@ -173,6 +173,179 @@ const AUTOMOTIVE_VOCABULARY = new Set([
   "accelerator",
   "acceleration",
   "accelerate",
+
+  // Words customers actually use for the service categories the OBD2 dataset
+  // does not cover. Without these the vocabulary gate rejected real complaints
+  // ("my AC blows warm air") as non-automotive. Additions only; nothing above
+  // was removed, and duplicates are harmless in a Set.
+
+  // AC and heating
+  "ac",
+  "air",
+  "conditioning",
+  "heater",
+  "heating",
+  "heat",
+  "warm",
+  "cold",
+  "coldest",
+  "blowing",
+  "blows",
+  "defrost",
+  "defroster",
+  "climate",
+  "hvac",
+  "coolant",
+  "thermostat",
+  "compressor",
+  "refrigerant",
+  "vent",
+  "vents",
+
+  // Brakes
+  "brake",
+  "brakes",
+  "braking",
+  "squeal",
+  "squealing",
+  "squeaks",
+  "stopping",
+  "stop",
+  "pedal",
+  "rotor",
+  "rotors",
+  "pads",
+  "caliper",
+  "calipers",
+  "abs",
+
+  // Tires and alignment
+  "tire",
+  "tires",
+  "tyre",
+  "tyres",
+  "alignment",
+  "pulls",
+  "pulling",
+  "vibration",
+  "vibrating",
+  "wobble",
+  "wobbling",
+  "balance",
+  "balancing",
+  "rotation",
+  "flat",
+  "pressure",
+  "tread",
+
+  // Battery and charging
+  "battery",
+  "jump",
+  "jumpstart",
+  "cranking",
+  "crank",
+  "start",
+  "starting",
+  "dead",
+  "charge",
+  "charging",
+  "alternator",
+  "terminal",
+  "terminals",
+  "voltage",
+
+  // Oil service
+  "oil",
+  "lube",
+  "lubrication",
+  "dipstick",
+  "filter",
+  "synthetic",
+  "conventional",
+  "viscosity",
+  "change",
+  "drain",
+
+  // Transmission
+  "transmission",
+  "shifting",
+  "shift",
+  "gear",
+  "gears",
+  "grinding",
+  "slipping",
+  "slip",
+  "clutch",
+  "neutral",
+  "reverse",
+  "overdrive",
+  "torque",
+  "converter",
+  "fluid",
+  "cvt",
+  "automatic",
+  "manual",
+
+  // General vehicle words
+  "mileage",
+  "odometer",
+  "dashboard",
+  "warning",
+  "indicator",
+  "stalling",
+  "stall",
+  "overheating",
+  "overheat",
+  "radiator",
+  "hose",
+  "belt",
+  "belts",
+  "serpentine",
+  "exhaust",
+  "muffler",
+  "catalytic",
+  "suspension",
+  "shock",
+  "shocks",
+  "strut",
+  "struts",
+  "steering",
+  "wheel",
+  "axle",
+  "differential",
+  "driveshaft",
+  "rpm",
+  "idle",
+  "idling",
+  "misfire",
+  "spark",
+  "plug",
+  "plugs",
+  "ignition",
+  "fuel",
+  "gasoline",
+  "diesel",
+  "injector",
+  "injectors",
+  "pump",
+  "leak",
+  "leaking",
+  "leaks",
+  "smoke",
+  "burning",
+  "smell",
+  "noise",
+  "knocking",
+  "clicking",
+  "rattling",
+  "humming",
+  "whining",
+  "cruise",
+  "speed",
+  "hybrid",
+  "inverter",
+  "ev",
+  "electric",
 ]);
 
 const BLOCKED_WORDS = new Set([
@@ -207,6 +380,209 @@ function buildTsQuery(words) {
   const terms = words.filter((word) => !STOP_WORDS.has(word));
 
   return [...new Set(terms)].join(" | ");
+}
+
+/**
+ * Symptom keywords per service, for the categories the diagnostic_codes
+ * dataset cannot speak to. Each service has several groups; a match needs
+ * words from at least two different groups, so a passing mention of "oil" does
+ * not by itself become an Oil Change.
+ *
+ * `distinctive` lists the groups whose wording belongs to this service and
+ * almost nothing else ("brakes", "alignment", "battery"). A description that
+ * hits only one group still matches when that group is distinctive - "the car
+ * pulls to one side" is an alignment complaint and nothing else, even though
+ * it names no second symptom.
+ */
+const SERVICE_KEYWORD_RULES = [
+  {
+    service: "Brake Repair",
+    groups: [
+      ["brake", "brakes", "braking"],
+      ["squeal", "squealing", "squeaks", "grinding", "noise", "sound"],
+      ["stopping", "stop", "slow", "longer", "pedal", "soft", "spongy"],
+      ["rotor", "rotors", "pads", "pad", "caliper", "calipers", "abs"],
+    ],
+    distinctive: [0, 3],
+  },
+  {
+    service: "AC & Heating Repair",
+    groups: [
+      ["ac", "air conditioning", "conditioning", "hvac", "climate"],
+      ["heater", "heating", "heat", "defroster", "defrost"],
+      ["warm", "hot", "cold", "coldest", "cool", "blowing", "blows"],
+      ["compressor", "refrigerant", "thermostat", "vent", "vents"],
+    ],
+    distinctive: [0, 1, 3],
+  },
+  {
+    service: "Tire Rotation & Alignment",
+    groups: [
+      ["tire", "tires", "tyre", "tyres"],
+      ["alignment", "aligned", "pulls", "pulling", "pull", "drifts", "drifting"],
+      ["vibration", "vibrating", "wobble", "wobbling", "shaking", "shake"],
+      ["balance", "balancing", "rotation", "rotate", "uneven", "wear", "tread"],
+    ],
+    distinctive: [0, 1],
+  },
+  {
+    service: "Battery Replacement",
+    groups: [
+      ["battery"],
+      ["dead", "died", "jump", "jumpstart", "cranking", "crank"],
+      ["start", "starting", "won't start", "doesn't start", "no start"],
+      ["charge", "charging", "voltage", "terminal", "terminals", "alternator"],
+    ],
+    distinctive: [0],
+  },
+  {
+    service: "Oil Change",
+    groups: [
+      ["oil"],
+      [
+        "change",
+        "changed",
+        "changing",
+        "due",
+        "overdue",
+        "months",
+        "miles",
+        "mileage",
+      ],
+      ["filter", "drain", "dipstick", "level", "low", "dark", "dirty"],
+      ["lube", "lubrication", "synthetic", "conventional"],
+    ],
+    // "oil" alone is exactly the false positive the two-group rule exists to
+    // prevent, so no group here stands on its own.
+    distinctive: [],
+  },
+  {
+    service: "Transmission Service",
+    groups: [
+      ["transmission", "tranny", "trans"],
+      ["shifting", "shift", "shifts", "gear", "gears"],
+      [
+        "grinding",
+        "slipping",
+        "slip",
+        "slips",
+        "jerking",
+        "jerks",
+        "hesitating",
+      ],
+      ["clutch", "neutral", "reverse", "fluid", "cvt", "torque", "converter"],
+    ],
+    distinctive: [0],
+  },
+];
+
+/**
+ * Score every keyword rule against the description and return the best match,
+ * or null. Single-word keywords are matched against the tokenised words so
+ * "air" cannot match inside another word; multi-word keywords are matched as a
+ * phrase against the whole description.
+ */
+function matchByKeywords(description, words) {
+  const haystack = description.toLowerCase();
+  const wordSet = new Set(words);
+
+  const scored = SERVICE_KEYWORD_RULES.map((rule) => {
+    const matchedGroups = [];
+
+    rule.groups.forEach((group, index) => {
+      const hit = group.some((keyword) =>
+        keyword.includes(" ") ? haystack.includes(keyword) : wordSet.has(keyword)
+      );
+      if (hit) matchedGroups.push(index);
+    });
+
+    const qualifies =
+      matchedGroups.length >= 2 ||
+      matchedGroups.some((index) => rule.distinctive.includes(index));
+
+    return {
+      service: rule.service,
+      groupCount: matchedGroups.length,
+      matchedGroups,
+      qualifies,
+    };
+  }).filter((entry) => entry.qualifies);
+
+  if (scored.length === 0) return null;
+
+  // Most groups wins; a two-group match beats a lone distinctive group.
+  scored.sort((a, b) => b.groupCount - a.groupCount);
+  return scored[0];
+}
+
+/**
+ * Service ids that some diagnostic code points at. Only these categories can
+ * ever come out of the text search, so a keyword match for anything else is
+ * the only signal available and should not wait for a search that cannot
+ * answer. Cached briefly: it only changes when the codes are re-seeded.
+ */
+const COVERAGE_TTL_MS = 10 * 60 * 1000;
+let coverageCache = { ids: null, loadedAt: 0 };
+
+async function loadCoveredServiceIds() {
+  if (coverageCache.ids && Date.now() - coverageCache.loadedAt < COVERAGE_TTL_MS) {
+    return coverageCache.ids;
+  }
+
+  const { rows } = await query(
+    `SELECT DISTINCT suggested_service_id
+       FROM diagnostic_codes
+      WHERE suggested_service_id IS NOT NULL`
+  );
+
+  const ids = new Set(rows.map((row) => row.suggested_service_id));
+  coverageCache = { ids, loadedAt: Date.now() };
+  return ids;
+}
+
+async function loadServiceByName(name) {
+  const { rows } = await query(
+    `SELECT id, name, est_price_min, est_price_max, est_duration_minutes
+       FROM services
+      WHERE name = $1`,
+    [name]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Build the response for a keyword match. The estimate comes from the services
+ * table, since there is no diagnostic code to read cost or time from, and
+ * Gemini is not called: it re-ranks codes, and there are none to rank.
+ */
+async function respondWithKeywordMatch(res, cleanDescription, service) {
+  const estTimeHours = Number(service.est_duration_minutes) / 60;
+  const chosen = {
+    id: null,
+    estCostMin: toNumber(service.est_price_min),
+    estCostMax: toNumber(service.est_price_max),
+    estTimeMinHours: estTimeHours,
+    estTimeMaxHours: estTimeHours,
+  };
+
+  const summary = `Based on your description, this is the most likely service needed: ${service.name}. A technician will confirm this during the inspection.`;
+
+  const id = await persist(cleanDescription, summary, chosen, []);
+
+  res.json({
+    id,
+    customerDescription: cleanDescription,
+    matchedCode: null,
+    matchedService: { id: service.id, name: service.name },
+    summary,
+    estCostMin: chosen.estCostMin,
+    estCostMax: chosen.estCostMax,
+    estTimeMinHours: chosen.estTimeMinHours,
+    estTimeMaxHours: chosen.estTimeMaxHours,
+    suggestedServiceId: service.id,
+    confidence: "normal",
+    matchSource: "keyword",
+  });
 }
 
 function withTimeout(promise, ms) {
@@ -328,6 +704,29 @@ router.post("/", limiter, async (req, res, next) => {
       return;
     }
 
+    // Keyword layer. The diagnostic_codes dataset is powertrain only: every
+    // code suggests either Engine Diagnostics or Transmission Service, so for
+    // brakes, tires, AC, batteries and oil the text search can only ever
+    // return a loosely related engine code or nothing at all. A confident
+    // keyword match for one of those uncovered categories is therefore the
+    // best signal available and is answered directly; for the categories the
+    // dataset does cover, the existing search plus Gemini re-rank still runs.
+    const keywordMatch = matchByKeywords(cleanDescription, words);
+    let keywordService = null;
+
+    if (keywordMatch) {
+      keywordService = await loadServiceByName(keywordMatch.service);
+
+      if (keywordService) {
+        const coveredServiceIds = await loadCoveredServiceIds();
+
+        if (!coveredServiceIds.has(keywordService.id)) {
+          await respondWithKeywordMatch(res, cleanDescription, keywordService);
+          return;
+        }
+      }
+    }
+
     const tsQuery = hasBlockedWord(words) ? "" : buildTsQuery(words);
 
     const { rows: candidates } = tsQuery
@@ -347,6 +746,14 @@ router.post("/", limiter, async (req, res, next) => {
       : { rows: [] };
 
     if (candidates.length === 0) {
+      // Nothing to re-rank. A keyword match for a covered category (which the
+      // block above deliberately left to the search) is still far better than
+      // a generic inspection.
+      if (keywordService) {
+        await respondWithKeywordMatch(res, cleanDescription, keywordService);
+        return;
+      }
+
       const chosen = {
         id: null,
         estCostMin: generalFallback.estCostMin,
