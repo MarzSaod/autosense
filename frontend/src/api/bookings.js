@@ -66,6 +66,26 @@ export async function getMonthAvailability(year, month, serviceIds = []) {
  * `reason` is SLOT_TAKEN, which is a different situation from a validation
  * failure and worth a different message.
  */
+/**
+ * Find a booking by its reference number and the email it was booked with.
+ *
+ * Resolves to the booking, camelCased:
+ *   { referenceId, status, appointmentDate, appointmentTime,
+ *     vehicle: { make, model, year }, contact: { fullName, email, phone },
+ *     services: [{ id, name, priceMin, priceMax, duration }],
+ *     totalDuration, createdAt }
+ *
+ * Rejects with an ApiError whose status is 404 when the reference and email do
+ * not go together - the same answer whether the reference is unknown or the
+ * email is wrong, so callers show one message for both.
+ */
+export async function lookupBooking({ referenceId, email }) {
+  const payload = await getJson(
+    `/api/bookings/lookup?referenceId=${encodeURIComponent(referenceId)}&email=${encodeURIComponent(email)}`,
+  )
+  return toCamel(payload).booking
+}
+
 export async function createBooking(payload) {
   try {
     return toCamel(await postJson('/api/bookings', payload))

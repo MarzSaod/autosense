@@ -7,7 +7,14 @@ export async function getJson(path) {
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new Error(payload?.error || 'Something went wrong.')
+    // An ApiError rather than a bare Error so callers can tell "not found"
+    // from "something went wrong" - the booking lookup needs that difference.
+    throw new ApiError(payload?.error || 'Something went wrong.', {
+      status: response.status,
+      field: payload?.field,
+      fieldMessage: payload?.fieldMessage,
+      reason: payload?.reason,
+    })
   }
 
   return payload

@@ -88,6 +88,9 @@ function Header() {
         </nav>
 
         <div className="hidden md:flex items-center gap-3">
+          <NavLink to="/booking/lookup" className={navLinkClass}>
+            Check My Booking
+          </NavLink>
           <Button variant="secondary" size="sm" as="link" to="/booking">
             Book Now
           </Button>
@@ -132,6 +135,14 @@ function Header() {
               ))}
             </nav>
             <div className="flex flex-col gap-3 px-4 pb-6">
+              <NavLink
+                to="/booking/lookup"
+                className={({ isActive }) =>
+                  `py-2.5 text-base font-medium rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2 ${isActive ? 'text-teal' : 'text-slate'}`
+                }
+              >
+                Check My Booking
+              </NavLink>
               <Button variant="secondary" as="link" to="/booking" className="w-full">
                 Book Now
               </Button>

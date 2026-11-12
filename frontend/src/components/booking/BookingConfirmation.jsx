@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import Button from '../ui/Button.jsx'
 import { Check } from '../ui/Icon.jsx'
@@ -61,6 +62,16 @@ function BookingConfirmation({ confirmation, serviceNames, onBookAnother }) {
           <span className="text-sm text-muted">Reference</span>
           <span className="font-bold text-navy">{confirmation.referenceId}</span>
         </div>
+        <p className="text-sm text-muted">
+          Save your reference number. You can look up your booking anytime at{' '}
+          <Link
+            to="/booking/lookup"
+            className="text-teal font-semibold hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2"
+          >
+            Check My Booking
+          </Link>
+          .
+        </p>
         {serviceNames.length > 0 && (
           <div className="flex items-center justify-between gap-4">
             <span className="text-sm text-muted">Services</span>

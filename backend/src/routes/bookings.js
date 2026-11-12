@@ -33,6 +33,18 @@ const limiter = rateLimit({
   message: { error: "Too many requests, please wait a moment and try again." },
 });
 
+// Lookup is keyed on a reference id plus the email the booking was made with,
+// which is the only credential a customer has. That pair is guessable in
+// principle, so the route gets its own, tighter limit to make walking the
+// reference space impractical.
+const lookupLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number(process.env.BOOKING_LOOKUP_RATE_LIMIT) || 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please wait a moment and try again." },
+});
+
 const MIN_VEHICLE_YEAR = 1980;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -212,6 +224,129 @@ async function generateReferenceId(client, attempts = 5) {
     `Could not generate an unused booking reference after ${attempts} attempts.`
   );
 }
+
+/**
+ * One booking with its services, found by reference id and email.
+ *
+ * The email comparison is case-insensitive: a customer who typed
+ * "Sam@Example.com" at booking time will not type it the same way again.
+ * Returns null when the pair matches nothing, which both callers answer as a
+ * 404 - deliberately the same response whether the reference does not exist or
+ * the email does not go with it, so this cannot be used to discover which
+ * reference ids are real.
+ */
+async function loadBookingForCustomer(referenceId, email, executor = pool) {
+  const { rows } = await executor.query(
+    `SELECT b.id,
+            b.reference_id,
+            b.status,
+            to_char(b.appointment_date, 'YYYY-MM-DD') AS appointment_date,
+            b.appointment_time::text                  AS appointment_time,
+            b.duration_minutes,
+            b.customer_name,
+            b.customer_email,
+            b.customer_phone,
+            b.vehicle_make,
+            b.vehicle_model,
+            b.vehicle_year,
+            b.diagnosis_request_id,
+            b.created_at,
+            COALESCE(
+              json_agg(
+                json_build_object(
+                  'id', s.id,
+                  'name', s.name,
+                  'price_min', s.est_price_min,
+                  'price_max', s.est_price_max,
+                  'duration', s.est_duration_minutes
+                )
+                ORDER BY s.id
+              ) FILTER (WHERE s.id IS NOT NULL),
+              '[]'
+            ) AS services
+       FROM bookings b
+       LEFT JOIN booking_services bs ON bs.booking_id = b.id
+       LEFT JOIN services s          ON s.id = bs.service_id
+      WHERE b.reference_id = $1
+        AND lower(b.customer_email) = lower($2)
+      GROUP BY b.id`,
+    [referenceId, email]
+  );
+
+  return rows[0] || null;
+}
+
+/** The lookup response shape. */
+function serializeBooking(row) {
+  return {
+    reference_id: row.reference_id,
+    status: row.status,
+    appointment_date: row.appointment_date,
+    // Trim Postgres's "HH:MM:SS" back to the "HH:MM" the UI formats.
+    appointment_time: minutesToTime(timeToMinutes(row.appointment_time)),
+    vehicle: {
+      make: row.vehicle_make,
+      model: row.vehicle_model,
+      year: row.vehicle_year,
+    },
+    contact: {
+      full_name: row.customer_name,
+      email: row.customer_email,
+      phone: row.customer_phone,
+    },
+    services: row.services,
+    total_duration: row.duration_minutes,
+    created_at: row.created_at,
+  };
+}
+
+function readLookupParams(source) {
+  const referenceId = asTrimmedString(source.referenceId).toUpperCase();
+  const email = asTrimmedString(source.email);
+
+  if (!referenceId) {
+    return { error: "A booking reference number is required.", field: "referenceId" };
+  }
+
+  if (!email || !EMAIL_PATTERN.test(email)) {
+    return { error: "Enter a valid email address.", field: "email" };
+  }
+
+  return { valid: { referenceId, email } };
+}
+
+/**
+ * GET /api/bookings/lookup?referenceId=AS-XXXXXX&email=...
+ *
+ * How a customer finds their appointment again after closing the tab. Both
+ * parts must match; 404 when they do not.
+ */
+router.get("/lookup", lookupLimiter, async (req, res, next) => {
+  const params = readLookupParams(req.query || {});
+
+  if (!params.valid) {
+    res.status(400).json({ error: params.error, field: params.field });
+    return;
+  }
+
+  try {
+    const row = await loadBookingForCustomer(
+      params.valid.referenceId,
+      params.valid.email
+    );
+
+    if (!row) {
+      res.status(404).json({
+        error: "No booking found with that reference number and email.",
+      });
+      return;
+    }
+
+    res.json({ booking: serializeBooking(row) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * POST /api/bookings
