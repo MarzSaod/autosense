@@ -86,6 +86,20 @@ export async function lookupBooking({ referenceId, email }) {
   return toCamel(payload).booking
 }
 
+/**
+ * Cancel a pending or confirmed appointment.
+ *
+ * Takes the same reference-plus-email pair as the lookup and resolves to
+ * { success, booking: { referenceId, status } }.
+ *
+ * Rejects with an ApiError: 404 when the pair matches nothing, 400 when the
+ * booking is already cancelled or has been completed, with the backend's own
+ * wording as the message.
+ */
+export async function cancelBooking({ referenceId, email }) {
+  return toCamel(await postJson('/api/bookings/cancel', { referenceId, email }))
+}
+
 export async function createBooking(payload) {
   try {
     return toCamel(await postJson('/api/bookings', payload))

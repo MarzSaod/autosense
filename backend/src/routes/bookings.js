@@ -33,10 +33,10 @@ const limiter = rateLimit({
   message: { error: "Too many requests, please wait a moment and try again." },
 });
 
-// Lookup is keyed on a reference id plus the email the booking was made with,
-// which is the only credential a customer has. That pair is guessable in
-// principle, so the route gets its own, tighter limit to make walking the
-// reference space impractical.
+// Lookup and cancel are keyed on a reference id plus the email the booking was
+// made with, which is the only credential a customer has. That pair is
+// guessable in principle, so these routes get their own, tighter limit to make
+// walking the reference space impractical.
 const lookupLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: Number(process.env.BOOKING_LOOKUP_RATE_LIMIT) || 20,
@@ -276,7 +276,7 @@ async function loadBookingForCustomer(referenceId, email, executor = pool) {
   return rows[0] || null;
 }
 
-/** The lookup response shape. */
+/** The lookup response shape, shared by the lookup and cancel routes. */
 function serializeBooking(row) {
   return {
     reference_id: row.reference_id,
@@ -345,6 +345,101 @@ router.get("/lookup", lookupLimiter, async (req, res, next) => {
     res.json({ booking: serializeBooking(row) });
   } catch (error) {
     next(error);
+  }
+});
+
+/**
+ * POST /api/bookings/cancel
+ *
+ * Body: { referenceId, email }
+ *
+ * Cancels a pending or confirmed appointment. A booking that is already
+ * cancelled, or already completed, is a 400 rather than a silent no-op.
+ */
+router.post("/cancel", lookupLimiter, async (req, res, next) => {
+  const params = readLookupParams(req.body || {});
+
+  if (!params.valid) {
+    res.status(400).json({ error: params.error, field: params.field });
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const existing = await loadBookingForCustomer(
+      params.valid.referenceId,
+      params.valid.email,
+      client
+    );
+
+    if (!existing) {
+      await client.query("ROLLBACK");
+      res.status(404).json({
+        error: "No booking found with that reference number and email.",
+      });
+      return;
+    }
+
+    if (existing.status === "cancelled") {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This booking has already been cancelled." });
+      return;
+    }
+
+    if (existing.status === "completed") {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Completed bookings cannot be cancelled." });
+      return;
+    }
+
+    // Guard the status in the UPDATE itself as well as in the read above: two
+    // cancel requests racing on the same booking would both pass the check,
+    // and only the one that actually moved a row should report success.
+    const { rows: updated } = await client.query(
+      `UPDATE bookings
+          SET status = 'cancelled'
+        WHERE id = $1
+          AND status IN ('pending', 'confirmed')
+       RETURNING reference_id, status`,
+      [existing.id]
+    );
+
+    if (updated.length === 0) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "This booking has already been cancelled." });
+      return;
+    }
+
+    // The estimate that led here is no longer converted, so put it back in the
+    // queue rather than leaving it pointing at a cancelled appointment.
+    if (existing.diagnosis_request_id) {
+      await client.query(
+        `UPDATE diagnosis_requests SET status = 'new' WHERE id = $1`,
+        [existing.diagnosis_request_id]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      booking: {
+        reference_id: updated[0].reference_id,
+        status: updated[0].status,
+      },
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      console.error("Rollback after failed cancellation failed:", rollbackError);
+    }
+    next(error);
+  } finally {
+    client.release();
   }
 });
 

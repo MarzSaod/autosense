@@ -5,7 +5,7 @@ import Card from '../components/ui/Card.jsx'
 import FormField from '../components/ui/FormField.jsx'
 import Input from '../components/ui/Input.jsx'
 import Button from '../components/ui/Button.jsx'
-import { lookupBooking } from '../api/bookings.js'
+import { cancelBooking, lookupBooking } from '../api/bookings.js'
 
 const EMPTY_VALUES = { referenceId: '', email: '' }
 
@@ -17,6 +17,12 @@ const STATUS_LABELS = {
   completed: 'Completed',
   cancelled: 'Cancelled',
 }
+
+// Only an appointment that is still going to happen can be called off.
+const CANCELLABLE_STATUSES = ['pending', 'confirmed']
+
+const CANCEL_PROMPT =
+  'Are you sure you want to cancel this appointment? This cannot be undone.'
 
 function formatLongDate(dateKey) {
   const [year, month, day] = String(dateKey).split('-').map(Number)
@@ -75,6 +81,11 @@ function BookingLookup() {
   const [loading, setLoading] = useState(false)
   const [lookupError, setLookupError] = useState(null)
   const [booking, setBooking] = useState(null)
+  // Cancelling asks first, inline rather than through a browser dialog, so the
+  // question is part of the page and cannot be dismissed by reflex.
+  const [confirmingCancel, setConfirmingCancel] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState(null)
 
   const errors = validate(values)
 
@@ -97,6 +108,8 @@ function BookingLookup() {
 
     setLoading(true)
     setBooking(null)
+    setConfirmingCancel(false)
+    setCancelError(null)
 
     try {
       const found = await lookupBooking({
@@ -117,8 +130,30 @@ function BookingLookup() {
     }
   }
 
+  async function handleCancel() {
+    setCancelling(true)
+    setCancelError(null)
+
+    try {
+      const response = await cancelBooking({
+        referenceId: booking.referenceId,
+        email: values.email.trim(),
+      })
+      // Show the cancelled booking in place rather than clearing the card, so
+      // the customer can see which appointment is now off.
+      setBooking((prev) => ({ ...prev, status: response.booking.status }))
+      setConfirmingCancel(false)
+    } catch (error) {
+      setCancelError(error?.message || 'Something went wrong. Please try again.')
+    } finally {
+      setCancelling(false)
+    }
+  }
+
   const serviceNames = (booking?.services || []).map((service) => service.name)
   const duration = formatDuration(booking?.totalDuration)
+  const isCancelled = booking?.status === 'cancelled'
+  const canCancel = booking ? CANCELLABLE_STATUSES.includes(booking.status) : false
 
   return (
     <div>
@@ -184,7 +219,15 @@ function BookingLookup() {
             <div className="w-full bg-surface border border-line/60 rounded-xl shadow-card p-6 text-left flex flex-col gap-3">
               <DetailRow label="Reference">{booking.referenceId}</DetailRow>
 
-              <DetailRow label="Status">{STATUS_LABELS[booking.status] || booking.status}</DetailRow>
+              <DetailRow label="Status">
+                {isCancelled ? (
+                  <span className="inline-flex items-center rounded-full bg-red-50 border border-red-200 px-2.5 py-0.5 text-sm font-semibold text-red-600">
+                    Cancelled
+                  </span>
+                ) : (
+                  STATUS_LABELS[booking.status] || booking.status
+                )}
+              </DetailRow>
 
               {serviceNames.length > 0 && (
                 <DetailRow label="Services">{serviceNames.join(', ')}</DetailRow>
@@ -206,6 +249,54 @@ function BookingLookup() {
 
               {booking.contact.phone && (
                 <DetailRow label="Phone">{booking.contact.phone}</DetailRow>
+              )}
+
+              {canCancel && (
+                <div className="border-t border-line/60 pt-4 mt-1 flex flex-col gap-3">
+                  {confirmingCancel ? (
+                    <>
+                      <p className="text-sm text-navy font-semibold">{CANCEL_PROMPT}</p>
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        <button
+                          type="button"
+                          onClick={handleCancel}
+                          disabled={cancelling}
+                          className="inline-flex items-center justify-center h-11 px-5 rounded-lg font-semibold text-white bg-red-600 hover:bg-red-700 transition-transform duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none"
+                        >
+                          {cancelling ? 'Cancelling…' : 'Yes, cancel it'}
+                        </button>
+                        <Button
+                          variant="secondary"
+                          onClick={() => setConfirmingCancel(false)}
+                          disabled={cancelling}
+                        >
+                          Keep my appointment
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmingCancel(true)}
+                      className="inline-flex items-center justify-center h-11 px-5 rounded-lg font-semibold text-red-600 bg-white border border-red-300 hover:bg-red-50 transition-transform duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2"
+                    >
+                      Cancel This Booking
+                    </button>
+                  )}
+
+                  {cancelError && (
+                    <p role="alert" className="text-sm text-red-500">
+                      {cancelError}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {isCancelled && (
+                <p className="border-t border-line/60 pt-4 mt-1 text-sm text-muted">
+                  This appointment has been cancelled. Book again anytime from the Book Now
+                  page.
+                </p>
               )}
             </div>
           )}
