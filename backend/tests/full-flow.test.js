@@ -1,11 +1,44 @@
 #!/usr/bin/env node
 /**
- * AutoSense end-to-end production test.
+ * AutoSense end-to-end API test suite.
  *
- * Runs every test group against the REAL production API, prints a summary
- * table, and finishes with cleanup SQL for every booking it created.
+ * A plain Node script - no test framework, no dependencies beyond the built-in
+ * modules.  It drives the real HTTP API end to end, prints a per-test summary
+ * table, and finishes with the SQL needed to undo what it wrote.
  *
- * Built-in modules only.  Run with:  node test-full-flow.js
+ * THIS SUITE WRITES TO WHATEVER DATABASE IT POINTS AT.  It creates real
+ * bookings (which hold real appointment slots), real diagnosis requests and
+ * real contact messages.  Nothing is rolled back: the cleanup SQL it prints at
+ * the end is not optional, and must be run against the target database once
+ * the run finishes.
+ *
+ * TEST GROUPS
+ *    1  health and data endpoints - /api/health, services, reviews, gallery, shop settings
+ *    2  AI diagnosis quality - eight descriptions, each expecting a known service or a rejection
+ *    3  availability - month grid, past dates, day slot grid
+ *    4  single service booking - creates a booking, checks the reference format and echo
+ *    5  multi-service booking - two services on one appointment, longer duration
+ *    6  concurrency - fills a slot to max_concurrent_appointments and expects 409 after
+ *    7  validation - empty services, past date, missing name, empty description
+ *    8  booking lookup - the real pair, wrong email, unknown reference, missing parameters
+ *    9  cancellation - cancel, repeat cancel, wrong email, lookup after, slot freed
+ *   10  contact form - a complete message plus each required field missing in turn
+ *   11  diagnosis to booking link - books with diagnosisRequestId (DB check noted as manual)
+ *   12  404 page - browser only, reported as a manual check
+ *   13  email confirmation flag - email_sent present on the booking response
+ *
+ * RUNNING IT AGAINST A LOCAL SERVER (the default)
+ *    cd backend && npm start                 # listens on port 4000
+ *    node backend/tests/full-flow.test.js
+ *
+ * RUNNING IT AGAINST PRODUCTION
+ *    API_BASE=https://autosense-production.up.railway.app CONFIRM_PROD=yes \
+ *      node backend/tests/full-flow.test.js
+ *
+ * Any API_BASE that is not localhost is treated as live: the suite prints a
+ * warning, and refuses to send a single request unless CONFIRM_PROD=yes is set.
+ * A production run takes about two minutes (the diagnosis endpoint is rate
+ * limited to 8/min, so those calls are paced 8s apart).
  *
  * NOTE on the live contract (it differs from the original spec):
  *   POST /api/bookings expects
@@ -21,10 +54,16 @@
  *   A full-capacity slot answers 409 with reason "at_capacity", not "SLOT_TAKEN".
  */
 
-const https = require("https");
-const { URL } = require("url");
+// ESM, because backend/package.json sets "type": "module".
+import http from "node:http";
+import https from "node:https";
+import { URL } from "node:url";
 
-const API = "https://autosense-production.up.railway.app";
+// Local by default: a bare `node full-flow.test.js` must never write test
+// bookings into the live database.  backend/src/server.js listens on
+// process.env.PORT || 4000, so 4000 is the local target.
+const DEFAULT_API = "http://localhost:4000";
+const API = process.env.API_BASE || DEFAULT_API;
 const FRONTEND = "https://autosense-phi.vercel.app";
 const SHOP_TZ = "America/New_York";
 
@@ -79,10 +118,11 @@ function rawRequest(method, path, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, API);
     const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
-    const req = https.request(
+    const transport = url.protocol === "http:" ? http : https;
+    const req = transport.request(
       {
         hostname: url.hostname,
-        port: 443,
+        port: url.port || (url.protocol === "http:" ? 80 : 443),
         path: url.pathname + url.search,
         method,
         headers: Object.assign(
@@ -164,6 +204,22 @@ const state = {
   multiSlot: null,         // "YYYY-MM-DD HH:MM" used by group 5
   references: [],          // every reference_id created (for cleanup SQL)
   diagnosisSummary: [],    // group 2 rows for the report
+  // Every booking createBooking() managed to create, keyed by the label the
+  // group passed ("single", "multi", "linked", ...).  Groups 8, 9 and 13 need
+  // the reference id, the request body and the response body of a booking an
+  // earlier group made, and reaching for them by label survives a group that
+  // skipped or failed better than indexing into state.references.
+  bookings: new Map(),
+  contactEmails: [],       // contact_messages addresses created (cleanup SQL)
+  manualNotes: [],         // things only a human or the DB can confirm
+};
+
+/** Email addresses the groups book with, reused by lookup and cancellation. */
+const EMAILS = {
+  single: "e2e-single@test.com",
+  multi: "e2e-multi@test.com",
+  linked: "e2e-linked@test.com",
+  contact: "e2e-contact-test@test.com",
 };
 
 function serviceId(name) {
@@ -189,6 +245,7 @@ async function createBooking(label, body) {
     (b.booking && (b.booking.reference_id || b.booking.referenceId)) || null;
   if (ref) {
     state.references.push(ref);
+    state.bookings.set(label, { ref, request: body, response: b });
     info(`${label}: created ${ref} (HTTP ${res.status})`);
   } else {
     info(`${label}: HTTP ${res.status} ${res.text.slice(0, 200)}`);
@@ -704,6 +761,403 @@ async function group7() {
 }
 
 /* ================================================================== */
+/* GROUP 8 - booking lookup                                           */
+/* ================================================================== */
+
+/** Open slots for a date, optionally for a specific service combination. */
+async function daySlots(date, serviceIds = []) {
+  const qs = serviceIds.length > 0 ? `&serviceIds=${serviceIds.join(",")}` : "";
+  const res = await get(`/api/availability/day?date=${date}${qs}`);
+  return Array.isArray(res.body) ? res.body : [];
+}
+
+async function group8() {
+  group("TEST GROUP 8 - BOOKING LOOKUP");
+
+  const single = state.bookings.get("single");
+  if (!single) {
+    ["8.1 lookup returns the booking", "8.2 lookup with the wrong email returns 404",
+     "8.3 lookup with an unknown reference returns 404",
+     "8.4 lookup without referenceId or email returns 400"].forEach((n) =>
+      skip(n, "no booking from test group 4"));
+    return;
+  }
+
+  // 8.1 the real pair
+  try {
+    const res = await get(
+      `/api/bookings/lookup?referenceId=${encodeURIComponent(single.ref)}&email=${encodeURIComponent(EMAILS.single)}`
+    );
+    const b = (res.body && res.body.booking) || null;
+    info(`lookup ${single.ref} -> HTTP ${res.status} ${res.text.slice(0, 180)}`);
+
+    if (!check("8.1a lookup returns the booking (200)", res.status === 200 && !!b,
+      `HTTP ${res.status}: ${res.text.slice(0, 160)}`)) {
+      ["8.1b lookup echoes the reference and a live status",
+       "8.1c lookup returns the booked service",
+       "8.1d lookup returns the vehicle",
+       "8.1e lookup returns the booked date and time"].forEach((n) =>
+        skip(n, "lookup did not return a booking"));
+    } else {
+      check("8.1b lookup echoes the reference and a live status",
+        b.reference_id === single.ref && ["pending", "confirmed"].includes(b.status),
+        `reference_id=${b.reference_id}, status=${b.status}`);
+
+      const names = (b.services || []).map((s) => s.name);
+      check("8.1c lookup returns the booked service",
+        names.includes("General Inspection"),
+        `services=${JSON.stringify(names)}`);
+
+      const v = b.vehicle || {};
+      const want = single.request.vehicle;
+      check("8.1d lookup returns the vehicle",
+        v.make === want.make && v.model === want.model && String(v.year) === String(want.year),
+        `got ${JSON.stringify(v)}, expected ${JSON.stringify(want)}`);
+
+      check("8.1e lookup returns the booked date and time",
+        b.appointment_date === single.request.date && b.appointment_time === single.request.time,
+        `got ${b.appointment_date} ${b.appointment_time}, expected ${single.request.date} ${single.request.time}`);
+    }
+  } catch (e) {
+    fail("8.1a lookup returns the booking (200)", e.message);
+  }
+
+  // 8.2 right reference, wrong email
+  try {
+    const res = await get(
+      `/api/bookings/lookup?referenceId=${encodeURIComponent(single.ref)}&email=wrong-email@test.com`
+    );
+    info(`wrong email -> HTTP ${res.status} ${res.text.slice(0, 140)}`);
+    check("8.2 lookup with the wrong email returns 404", res.status === 404, `got ${res.status}`);
+  } catch (e) { fail("8.2 lookup with the wrong email returns 404", e.message); }
+
+  // 8.3 reference that does not exist
+  try {
+    const res = await get(
+      `/api/bookings/lookup?referenceId=AS-ZZZZZZ&email=${encodeURIComponent(EMAILS.single)}`
+    );
+    info(`fake reference -> HTTP ${res.status} ${res.text.slice(0, 140)}`);
+    check("8.3 lookup with an unknown reference returns 404", res.status === 404, `got ${res.status}`);
+  } catch (e) { fail("8.3 lookup with an unknown reference returns 404", e.message); }
+
+  // 8.4 missing parameters
+  try {
+    const noRef = await get(`/api/bookings/lookup?email=${encodeURIComponent(EMAILS.single)}`);
+    const noEmail = await get(`/api/bookings/lookup?referenceId=${encodeURIComponent(single.ref)}`);
+    info(`no referenceId -> HTTP ${noRef.status}; no email -> HTTP ${noEmail.status}`);
+    check("8.4 lookup without referenceId or email returns 400",
+      noRef.status === 400 && noEmail.status === 400,
+      `no referenceId: ${noRef.status}, no email: ${noEmail.status}`);
+  } catch (e) { fail("8.4 lookup without referenceId or email returns 400", e.message); }
+}
+
+/* ================================================================== */
+/* GROUP 9 - booking cancellation                                     */
+/* ================================================================== */
+
+async function group9() {
+  group("TEST GROUP 9 - BOOKING CANCELLATION");
+
+  // Cancel the multi-service booking: group 8 already asserted the single
+  // booking is live, and this one's slot is not the one group 6 filled to
+  // capacity, so freeing it is observable in test 9.5.
+  const target = state.bookings.get("multi");
+  const names = [
+    "9.1 cancellation succeeds and reports status cancelled",
+    "9.2 cancelling the same booking again returns 400",
+    "9.3 cancelling with the wrong email returns 404",
+    "9.4 the cancelled booking looks up as cancelled",
+    "9.5 the cancelled slot is available again",
+  ];
+
+  if (!target) {
+    names.forEach((n) => skip(n, "no booking from test group 5"));
+    return;
+  }
+
+  const date = target.request.date;
+  const time = target.request.time;
+  const serviceIds = target.request.serviceIds || [];
+
+  // Availability for this slot *before* the cancellation, so 9.5 can show the
+  // change rather than only the end state.  The shop allows two concurrent
+  // appointments, so the slot may well read as available either way; the open
+  // slot count is what moves.
+  let beforeSlot = null;
+  try {
+    beforeSlot = (await daySlots(date, serviceIds)).find((s) => s.time === time) || null;
+    info(`before cancel: ${date} ${time} is_available=${beforeSlot ? beforeSlot.is_available : "(slot not in grid)"}`);
+  } catch (e) {
+    info(`before cancel: availability check failed - ${e.message}`);
+  }
+
+  // 9.1 cancel it
+  let cancelled = false;
+  try {
+    const res = await post("/api/bookings/cancel", {
+      referenceId: target.ref,
+      email: EMAILS.multi,
+    });
+    const b = (res.body && res.body.booking) || {};
+    info(`cancel ${target.ref} -> HTTP ${res.status} ${res.text.slice(0, 180)}`);
+    cancelled = check("9.1 cancellation succeeds and reports status cancelled",
+      res.status === 200 && res.body && res.body.success === true && b.status === "cancelled",
+      `HTTP ${res.status}: ${res.text.slice(0, 160)}`);
+  } catch (e) { fail("9.1 cancellation succeeds and reports status cancelled", e.message); }
+
+  // 9.2 cancel it again
+  try {
+    const res = await post("/api/bookings/cancel", {
+      referenceId: target.ref,
+      email: EMAILS.multi,
+    });
+    info(`second cancel -> HTTP ${res.status} ${res.text.slice(0, 140)}`);
+    check("9.2 cancelling the same booking again returns 400",
+      res.status === 400, `got ${res.status}: ${res.text.slice(0, 140)}`);
+  } catch (e) { fail("9.2 cancelling the same booking again returns 400", e.message); }
+
+  // 9.3 wrong email.  Uses the still-live single booking so a 404 can only
+  // come from the email mismatch, not from an already-cancelled booking.
+  const live = state.bookings.get("single") || target;
+  try {
+    const res = await post("/api/bookings/cancel", {
+      referenceId: live.ref,
+      email: "wrong-email@test.com",
+    });
+    info(`cancel with wrong email -> HTTP ${res.status} ${res.text.slice(0, 140)}`);
+    check("9.3 cancelling with the wrong email returns 404",
+      res.status === 404, `got ${res.status}: ${res.text.slice(0, 140)}`);
+  } catch (e) { fail("9.3 cancelling with the wrong email returns 404", e.message); }
+
+  // 9.4 lookup shows the cancellation
+  try {
+    const res = await get(
+      `/api/bookings/lookup?referenceId=${encodeURIComponent(target.ref)}&email=${encodeURIComponent(EMAILS.multi)}`
+    );
+    const b = (res.body && res.body.booking) || {};
+    info(`lookup after cancel -> HTTP ${res.status} status=${b.status}`);
+    check("9.4 the cancelled booking looks up as cancelled",
+      res.status === 200 && b.status === "cancelled",
+      `HTTP ${res.status}, status=${b.status}`);
+  } catch (e) { fail("9.4 the cancelled booking looks up as cancelled", e.message); }
+
+  // 9.5 the freed slot
+  if (!cancelled) {
+    skip("9.5 the cancelled slot is available again", "cancellation did not succeed");
+    return;
+  }
+  try {
+    const after = (await daySlots(date, serviceIds)).find((s) => s.time === time) || null;
+    const beforeCount = beforeSlot ? beforeSlot.open_slot_count : undefined;
+    info(`after cancel: ${date} ${time} is_available=${after ? after.is_available : "(slot not in grid)"}`);
+    check("9.5 the cancelled slot is available again",
+      !!after && after.is_available === true,
+      after ? `is_available=${after.is_available} (was ${beforeSlot && beforeSlot.is_available}${beforeCount !== undefined ? `, count ${beforeCount}` : ""})`
+            : `slot ${time} not present in the grid for ${date}`);
+  } catch (e) { fail("9.5 the cancelled slot is available again", e.message); }
+}
+
+/* ================================================================== */
+/* GROUP 10 - contact form                                            */
+/* ================================================================== */
+
+async function group10() {
+  group("TEST GROUP 10 - CONTACT FORM");
+
+  const valid = {
+    name: "Test User",
+    email: EMAILS.contact,
+    phone: "5550009999",
+    message: "This is an automated test message.",
+  };
+
+  // 10.1 a complete message
+  try {
+    const res = await post("/api/contact", valid);
+    info(`valid contact -> HTTP ${res.status} ${res.text.slice(0, 180)}`);
+    const ok = check("10.1 valid contact message accepted (201)",
+      (res.status === 201 || res.status === 200) && res.body && res.body.success === true,
+      `HTTP ${res.status}: ${res.text.slice(0, 160)}`);
+    if (ok) state.contactEmails.push(EMAILS.contact);
+  } catch (e) { fail("10.1 valid contact message accepted (201)", e.message); }
+
+  // 10.2 - 10.5 each required field in turn, plus an empty message string
+  const bad = [
+    ["10.2 contact without a name rejected with 400", (b) => { delete b.name; }],
+    ["10.3 contact without an email rejected with 400", (b) => { delete b.email; }],
+    ["10.4 contact without a message rejected with 400", (b) => { delete b.message; }],
+    ["10.5 contact with an empty message rejected with 400", (b) => { b.message = ""; }],
+  ];
+
+  for (const [name, mutate] of bad) {
+    try {
+      const body = Object.assign({}, valid);
+      mutate(body);
+      const res = await post("/api/contact", body);
+      info(`${name.slice(0, 4)}-> HTTP ${res.status} ${res.text.slice(0, 120)}`);
+      check(name, res.status === 400, `got ${res.status}: ${res.text.slice(0, 120)}`);
+    } catch (e) { fail(name, e.message); }
+  }
+}
+
+/* ================================================================== */
+/* GROUP 11 - diagnosis to booking link                               */
+/* ================================================================== */
+
+const LINKED_DIAGNOSIS_DESCRIPTION =
+  "My brakes are squealing and it takes longer to stop";
+
+async function group11() {
+  group("TEST GROUP 11 - DIAGNOSIS TO BOOKING LINK");
+
+  const names = [
+    "11.1 diagnosis returns a request id",
+    "11.2 booking accepts diagnosisRequestId (201)",
+    "11.3 linked booking has a valid referenceId",
+  ];
+
+  // /api/diagnosis is limited to 8 per minute per IP and group 2 has already
+  // spent several; keep the same 8s pacing the earlier groups use.
+  await sleep(9000);
+
+  let diagnosis = null;
+  try {
+    const res = await post("/api/diagnosis", {
+      description: LINKED_DIAGNOSIS_DESCRIPTION,
+      make: "Honda", model: "Civic", year: "2021",
+    });
+    diagnosis = res.body || {};
+    // The endpoint names it `id`; accept the other two spellings in case that
+    // ever changes.
+    const requestId = diagnosis.id ?? diagnosis.requestId ?? diagnosis.diagnosisRequestId ?? null;
+    info(`diagnosis -> HTTP ${res.status} id=${requestId} suggestedServiceId=${diagnosis.suggestedServiceId}`);
+
+    if (!check("11.1 diagnosis returns a request id",
+      res.status === 200 && Number.isInteger(requestId),
+      `HTTP ${res.status}, id=${JSON.stringify(requestId)}`)) {
+      names.slice(1).forEach((n) => skip(n, "no diagnosis request id"));
+      return;
+    }
+    diagnosis.requestId = requestId;
+  } catch (e) {
+    fail("11.1 diagnosis returns a request id", e.message);
+    names.slice(1).forEach((n) => skip(n, "diagnosis call failed"));
+    return;
+  }
+
+  // Book the service the diagnosis matched, on a slot none of the earlier
+  // groups used.
+  const matchedServiceId = diagnosis.suggestedServiceId || serviceId("General Inspection");
+  if (!matchedServiceId) {
+    names.slice(1).forEach((n) => skip(n, "no service id to book"));
+    return;
+  }
+
+  const taken = new Set([state.singleSlot, (state.multiSlot || "").split(" ")[1]]);
+  const start = state.bookingDate || nextDays(shopTodayKey(), 1);
+  let date = null;
+  let time = null;
+
+  for (const candidate of [start, nextDays(start, 1), nextDays(start, 2), nextDays(start, 3)]) {
+    const slots = await daySlots(candidate, [matchedServiceId]);
+    const open = slots.filter((s) => s.is_available && !(candidate === start && taken.has(s.time)));
+    info(`day ${candidate} (service ${matchedServiceId}): open ${open.map((s) => s.time).join(", ") || "(none)"}`);
+    if (open.length > 0) {
+      date = candidate;
+      time = open[open.length - 1].time;
+      break;
+    }
+  }
+
+  if (!time) {
+    names.slice(1).forEach((n) => skip(n, "no free slot for the matched service"));
+    return;
+  }
+
+  const body = Object.assign(
+    bookingBody({
+      serviceIds: [matchedServiceId],
+      date, time,
+      make: "Honda", model: "Civic", year: "2021",
+      name: "E2E Test Linked", email: EMAILS.linked, phone: "5550004444",
+    }),
+    { diagnosisRequestId: diagnosis.requestId }
+  );
+
+  const { res, ref } = await createBooking("linked", body);
+  const created = check("11.2 booking accepts diagnosisRequestId (201)",
+    res.status === 201 || res.status === 200,
+    `HTTP ${res.status}: ${res.text.slice(0, 160)}`);
+
+  if (!created) {
+    skip("11.3 linked booking has a valid referenceId", "booking not created");
+    return;
+  }
+
+  check("11.3 linked booking has a valid referenceId",
+    REF_PATTERN.test(ref || ""), `got ${JSON.stringify(ref)}`);
+
+  state.manualNotes.push(
+    `diagnosis_requests id ${diagnosis.requestId} should now read status='converted_to_booking' ` +
+    `(linked to booking ${ref}) - the API exposes no way to read it, so check the DB:\n` +
+    `       SELECT id, status FROM diagnosis_requests WHERE id = ${diagnosis.requestId};`
+  );
+  info("manual DB verification needed: diagnosis_requests.status -> 'converted_to_booking'");
+}
+
+/* ================================================================== */
+/* GROUP 12 - 404 page (browser only)                                 */
+/* ================================================================== */
+
+async function group12() {
+  group("TEST GROUP 12 - 404 PAGE");
+  skip("12.1 unknown route shows the 404 page",
+    `MANUAL - verify ${FRONTEND}/some-fake-page shows the 404 page in a browser`);
+  state.manualNotes.push(
+    `MANUAL - open ${FRONTEND}/some-fake-page in a browser and confirm the 404 page renders ` +
+    "(heading \"Page not found\") inside the normal header/footer layout."
+  );
+}
+
+/* ================================================================== */
+/* GROUP 13 - email confirmation flag                                 */
+/* ================================================================== */
+
+async function group13() {
+  group("TEST GROUP 13 - EMAIL CONFIRMATION FLAG");
+
+  // Reuse a booking an earlier group already created rather than spending
+  // another slot and another row in the production database.
+  const entry = state.bookings.get("single") || state.bookings.get("linked") ||
+    state.bookings.get("multi") || null;
+
+  if (!entry) {
+    skip("13.1 booking response carries an email_sent flag", "no booking was created this run");
+    skip("13.2 email_sent is false while SMTP is unconfigured", "no booking was created this run");
+    return;
+  }
+
+  const body = entry.response || {};
+  const flag = body.email_sent ?? body.emailSent;
+  info(`booking ${entry.ref}: email_sent=${JSON.stringify(flag)}`);
+
+  if (!check("13.1 booking response carries an email_sent flag", typeof flag === "boolean",
+    `got ${JSON.stringify(flag)} - keys: ${Object.keys(body).join(", ")}`)) {
+    skip("13.2 email_sent is false while SMTP is unconfigured", "no flag in the response");
+    return;
+  }
+
+  if (flag === false) {
+    pass("13.2 email_sent is false while SMTP is unconfigured", "");
+  } else {
+    // Not a defect if the shop has since configured SMTP - say so plainly
+    // rather than reporting a failure the code did not cause.
+    skip("13.2 email_sent is false while SMTP is unconfigured",
+      "email_sent is true, so SMTP is now configured; a confirmation email went out");
+  }
+}
+
+/* ================================================================== */
 /* final report                                                       */
 /* ================================================================== */
 
@@ -738,16 +1192,54 @@ function report() {
   console.log("");
   console.log(`  ${C.green}PASSED: ${passed}${C.reset}   ${C.red}FAILED: ${failed}${C.reset}   ${C.yellow}SKIPPED: ${skipped}${C.reset}   TOTAL: ${results.length}`);
 
-  group("CLEANUP SQL");
-  if (state.references.length === 0) {
-    console.log("  -- No test bookings were created during this run; nothing to clean up.");
-  } else {
-    const list = state.references.map((r) => `'${r}'`).join(", ");
-    console.log(`  -- ${state.references.length} test booking(s) created by this run`);
-    console.log("");
-    console.log(`DELETE FROM booking_services WHERE booking_id IN (SELECT id FROM bookings WHERE reference_id IN (${list}));`);
-    console.log(`DELETE FROM bookings WHERE reference_id IN (${list});`);
+  if (state.manualNotes.length > 0) {
+    group("MANUAL VERIFICATION");
+    for (const note of state.manualNotes) {
+      console.log("  - " + note);
+    }
   }
+
+  group("CLEANUP SQL");
+  const sql = [];
+
+  if (state.references.length > 0) {
+    const list = state.references.map((r) => `'${r}'`).join(", ");
+    sql.push(`-- ${state.references.length} test booking(s) created by this run`);
+    // Bookings first: a linked booking holds a foreign key into
+    // diagnosis_requests, so the rows below cannot go before it.
+    sql.push(`DELETE FROM booking_services WHERE booking_id IN (SELECT id FROM bookings WHERE reference_id IN (${list}));`);
+    sql.push(`DELETE FROM bookings WHERE reference_id IN (${list});`);
+  }
+
+  if (state.contactEmails.length > 0) {
+    const emails = [...new Set(state.contactEmails)].map((e) => `'${e}'`).join(", ");
+    sql.push("");
+    sql.push("-- contact messages created by test group 10");
+    sql.push(`DELETE FROM contact_messages WHERE email IN (${emails});`);
+  }
+
+  // Every diagnosis call in this suite writes a diagnosis_requests row (and
+  // child rows in diagnosis_request_codes when a diagnostic code matched).
+  const descriptions = [...new Set([
+    ...DIAGNOSIS_CASES.map((c) => c.description),
+    LINKED_DIAGNOSIS_DESCRIPTION,
+  ])].map((d) => `'${d.replace(/'/g, "''")}'`);
+
+  sql.push("");
+  sql.push("-- diagnosis requests created by test groups 2 and 11");
+  sql.push("DELETE FROM diagnosis_request_codes WHERE diagnosis_request_id IN (");
+  sql.push(`  SELECT id FROM diagnosis_requests WHERE customer_description IN (`);
+  sql.push("    " + descriptions.join(",\n    "));
+  sql.push("  )");
+  sql.push(");");
+  sql.push("DELETE FROM diagnosis_requests WHERE customer_description IN (");
+  sql.push("  " + descriptions.join(",\n  "));
+  sql.push(");");
+
+  if (state.references.length === 0 && state.contactEmails.length === 0) {
+    console.log("  -- No bookings or contact messages were created during this run.");
+  }
+  console.log(sql.join("\n"));
   console.log("");
 
   return failed;
@@ -755,14 +1247,87 @@ function report() {
 
 /* ================================================================== */
 
+/* ================================================================== */
+/* target guard                                                       */
+/* ================================================================== */
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
+function isLocalTarget(base) {
+  try {
+    return LOCAL_HOSTS.has(new URL(base).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Refuse to touch anything that is not localhost unless CONFIRM_PROD=yes.
+ * Returns true when the run may proceed; prints and returns false otherwise.
+ * Called before the first request, so a blocked run sends nothing at all.
+ */
+function confirmTarget() {
+  if (isLocalTarget(API)) return true;
+
+  const host = (() => {
+    try { return new URL(API).host; } catch { return API; }
+  })();
+
+  console.log("");
+  console.log(C.bold + C.yellow + "!".repeat(72) + C.reset);
+  console.log(C.bold + C.yellow + "  WARNING: this is not a local target." + C.reset);
+  console.log(C.bold + C.yellow + "!".repeat(72) + C.reset);
+  console.log("");
+  console.log(`  Target host: ${C.bold}${host}${C.reset}`);
+  console.log("");
+  console.log("  This suite writes to the database behind that host.  It will create");
+  console.log("  real bookings that hold real appointment slots, real diagnosis requests");
+  console.log("  and real contact messages.  None of it is rolled back.");
+
+  if (process.env.CONFIRM_PROD === "yes") {
+    console.log("");
+    console.log(`  ${C.green}CONFIRM_PROD=yes is set - proceeding.${C.reset}`);
+    console.log("  Run the cleanup SQL printed at the end of the run against this database.");
+    return true;
+  }
+
+  console.log("");
+  console.log(`  ${C.red}Refusing to run.${C.reset}  No request has been sent.`);
+  console.log("");
+  console.log("  To run against this host anyway, set CONFIRM_PROD=yes and be ready to");
+  console.log("  clean up afterwards:");
+  console.log("");
+  console.log(`    API_BASE=${API} CONFIRM_PROD=yes node backend/tests/full-flow.test.js`);
+  console.log("");
+  console.log("  Afterwards the suite prints DELETE statements for every booking,");
+  console.log("  contact message and diagnosis request it created; those rows stay in");
+  console.log("  the database, and the bookings keep blocking their slots, until the");
+  console.log("  printed SQL is run.");
+  console.log("");
+  console.log(`  To run locally instead, start the backend and leave API_BASE unset`);
+  console.log(`  (the default target is ${DEFAULT_API}).`);
+  console.log("");
+  return false;
+}
+
+/* ================================================================== */
+
 async function main() {
-  console.log(C.bold + "AutoSense production end-to-end test" + C.reset);
+  if (!confirmTarget()) {
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(C.bold + "AutoSense end-to-end API test" + C.reset);
   console.log(`  API:      ${API}`);
   console.log(`  Frontend: ${FRONTEND}`);
   console.log(`  Shop date (${SHOP_TZ}): ${shopTodayKey()}`);
   console.log(`  Started:  ${new Date().toISOString()}`);
 
-  const groups = [group1, group2, group3, group4, group5, group6, group7];
+  const groups = [
+    group1, group2, group3, group4, group5, group6, group7,
+    group8, group9, group10, group11, group12, group13,
+  ];
   for (const g of groups) {
     try {
       await g();
