@@ -43,10 +43,18 @@ function BookingConfirmation({ confirmation, serviceNames, onBookAnother }) {
 
       <h1 className="text-section-title text-navy">Your appointment is booked</h1>
 
-      <p className="text-slate">
-        We&apos;ve sent the details to{' '}
-        <span className="font-bold text-navy">{confirmation.contact.email}</span>
-      </p>
+      {/* Only promise an email when the backend says one is actually going
+          out; otherwise point the customer at the details on this page. */}
+      {confirmation.emailSent ? (
+        <p className="text-slate">
+          We&apos;ve sent a confirmation to{' '}
+          <span className="font-bold text-navy">{confirmation.contact.email}</span>
+        </p>
+      ) : (
+        <p className="text-slate">
+          Your booking details are below. Save your reference number for your records.
+        </p>
+      )}
 
       <div className="w-full bg-surface border border-line/60 rounded-xl shadow-card p-6 text-left flex flex-col gap-3 mt-2">
         <div className="flex items-center justify-between gap-4">

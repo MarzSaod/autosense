@@ -14,6 +14,10 @@ import {
   parseServiceIds,
   resolveDurationMinutes,
 } from "../lib/availabilityData.js";
+import {
+  isEmailConfigured,
+  sendBookingConfirmation,
+} from "../lib/emailService.js";
 
 const router = express.Router();
 
@@ -391,6 +395,30 @@ router.post("/", limiter, async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    const appointmentTime = minutesToTime(timeToMinutes(row.appointment_time));
+
+    // Fire and forget, after the commit. The appointment is saved; the
+    // customer should not wait on an SMTP handshake to hear that, and a mail
+    // failure must not turn a successful booking into an error. sendBooking-
+    // Confirmation never rejects, but the catch keeps an unexpected throw from
+    // becoming an unhandled rejection.
+    sendBookingConfirmation({
+      referenceId: row.reference_id,
+      fullName: booking.fullName,
+      email: booking.email,
+      date: row.appointment_date,
+      time: appointmentTime,
+      durationMinutes: row.duration_minutes,
+      vehicle: {
+        make: booking.make,
+        model: booking.model,
+        year: booking.year,
+      },
+      services: resolved.services.map((service) => ({ name: service.name })),
+    }).catch((error) => {
+      console.error("Booking confirmation email failed:", error.message);
+    });
+
     // Shaped so the frontend's snake_case -> camelCase conversion produces
     // exactly the field names the confirmation screen already reads:
     // referenceId, serviceIds, vehicle.{year,make,model}, contact.email,
@@ -417,8 +445,13 @@ router.post("/", limiter, async (req, res, next) => {
       },
       date: row.appointment_date,
       // Trim Postgres's "HH:MM:SS" back to the "HH:MM" the UI formats.
-      time: minutesToTime(timeToMinutes(row.appointment_time)),
+      time: appointmentTime,
       duration_minutes: row.duration_minutes,
+      // Whether a confirmation email is on its way, so the confirmation screen
+      // can say "we've emailed you" only when that is true. Reports whether
+      // mail is configured, not the eventual delivery result: the send is
+      // deliberately not awaited.
+      email_sent: isEmailConfigured(),
       diagnosis_request_id: booking.diagnosisRequestId,
       created_at: row.created_at,
     });
