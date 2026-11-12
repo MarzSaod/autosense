@@ -8,6 +8,7 @@ import galleryRouter from "./routes/gallery.js";
 import shopSettingsRouter from "./routes/shopSettings.js";
 import availabilityRouter from "./routes/availability.js";
 import bookingsRouter from "./routes/bookings.js";
+import contactRouter from "./routes/contact.js";
 import {
   SHOP_TIME_ZONE,
   SHOP_TIME_ZONE_SOURCE,
@@ -73,6 +74,7 @@ app.use("/api/gallery", galleryRouter);
 app.use("/api/shop-settings", shopSettingsRouter);
 app.use("/api/availability", availabilityRouter);
 app.use("/api/bookings", bookingsRouter);
+app.use("/api/contact", contactRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });
