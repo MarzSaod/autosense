@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import "dotenv/config";
 import diagnosisRouter from "./routes/diagnosis.js";
 import servicesRouter from "./routes/services.js";
@@ -9,6 +10,7 @@ import shopSettingsRouter from "./routes/shopSettings.js";
 import availabilityRouter from "./routes/availability.js";
 import bookingsRouter from "./routes/bookings.js";
 import contactRouter from "./routes/contact.js";
+import adminRouter from "./routes/admin.js";
 import {
   SHOP_TIME_ZONE,
   SHOP_TIME_ZONE_SOURCE,
@@ -75,6 +77,16 @@ app.use("/api/shop-settings", shopSettingsRouter);
 app.use("/api/availability", availabilityRouter);
 app.use("/api/bookings", bookingsRouter);
 app.use("/api/contact", contactRouter);
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many login attempts, please try again later." },
+});
+app.use("/api/admin/login", loginLimiter);
+app.use("/api/admin", adminRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Not found." });

@@ -11,6 +11,13 @@ import Gallery from './pages/Gallery.jsx'
 import About from './pages/About.jsx'
 import Contact from './pages/Contact.jsx'
 import NotFound from './pages/NotFound.jsx'
+import { AuthProvider } from './admin/AuthContext.jsx'
+import AdminLayout from './admin/AdminLayout.jsx'
+import AdminLogin from './admin/Login.jsx'
+import AdminDashboard from './admin/Dashboard.jsx'
+import AdminServices from './admin/Services.jsx'
+import AdminBookings from './admin/Bookings.jsx'
+import AdminGallery from './admin/Gallery.jsx'
 
 function App() {
   return (
@@ -29,6 +36,14 @@ function App() {
           <Route path="contact" element={<Contact />} />
           <Route path="*" element={<NotFound />} />
         </Route>
+
+        <Route path="/admin" element={<AuthProvider><AdminLayout /></AuthProvider>}>
+          <Route index element={<AdminDashboard />} />
+          <Route path="services" element={<AdminServices />} />
+          <Route path="bookings" element={<AdminBookings />} />
+          <Route path="gallery" element={<AdminGallery />} />
+        </Route>
+        <Route path="/admin/login" element={<AuthProvider><AdminLogin /></AuthProvider>} />
       </Routes>
     </>
   )
