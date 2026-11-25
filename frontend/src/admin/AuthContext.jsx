@@ -30,8 +30,14 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
+  const refreshUser = useCallback(async () => {
+    const u = await getAdminUser()
+    setUser(u)
+    return u
+  }, [])
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

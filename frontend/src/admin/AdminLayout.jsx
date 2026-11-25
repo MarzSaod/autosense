@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink, Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Menu, Close } from '../components/ui/Icon.jsx'
 import Button from '../components/ui/Button.jsx'
@@ -58,6 +58,7 @@ function AdminLayout() {
     ...baseNavItems,
     { label: 'Messages', to: '/admin/messages', badge: unreadCount },
     ...(user?.role === 'admin' ? [{ label: 'Staff', to: '/admin/staff' }] : []),
+    { label: 'Account', to: '/admin/account' },
   ]
 
   return (
@@ -159,6 +160,14 @@ function AdminLayout() {
           </AnimatePresence>
 
           <main className="flex-1 overflow-y-auto bg-white">
+            {user?.mustChangePassword && (
+              <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 text-sm text-amber-800">
+                You are still using a temporary password. Please{' '}
+                <Link to="/admin/account" className="font-semibold underline hover:text-amber-900">
+                  change it
+                </Link>.
+              </div>
+            )}
             <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
               <Outlet />
             </div>

@@ -6,8 +6,9 @@
     "start": "node src/server.js",
     "migrate": "node src/scripts/migrate.js"
   },
+  "description": "AutoSense backend: AI diagnosis, booking, availability, and admin API.",
   "keywords": [],
-  "author": "",
+  "author": "AutoSense Team",
   "license": "ISC",
   "type": "module",
   "dependencies": {

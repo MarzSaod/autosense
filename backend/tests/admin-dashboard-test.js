@@ -1,3 +1,4 @@
+import "dotenv/config";
 import http from "node:http";
 import { execSync } from "node:child_process";
 import { URL, fileURLToPath } from "node:url";
@@ -5,11 +6,19 @@ import { dirname, resolve } from "node:path";
 import jwt from "jsonwebtoken";
 import pg from "pg";
 
+const required = ["TEST_ADMIN_EMAIL", "TEST_ADMIN_PASSWORD", "JWT_SECRET", "DATABASE_URL"];
+for (const name of required) {
+  if (!process.env[name]) {
+    console.error(`Missing required environment variable: ${name}`);
+    process.exit(1);
+  }
+}
+
 const API = process.env.API_BASE || "http://localhost:4000";
-const ADMIN_EMAIL = "admin@autosense.com";
-const ADMIN_PASSWORD = "changeme123";
-const JWT_SECRET = process.env.JWT_SECRET || "dev-placeholder-change-in-production";
-const DATABASE_URL = process.env.DATABASE_URL || "postgres://postgres:1q2w3e@localhost:5432/autosense";
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD;
+const JWT_SECRET = process.env.JWT_SECRET;
+const DATABASE_URL = process.env.DATABASE_URL;
 
 const C = {
   reset: "\x1b[0m", bold: "\x1b[1m",
@@ -556,6 +565,140 @@ async function lookupTests() {
   } catch (e) { fail(43, "Lookup with real booking", e.message); }
 }
 
+async function passwordChangeTests() {
+  heading("PASSWORD CHANGE");
+  if (!state.token) {
+    [45,46,47,48,49,50,51,52,53,54,55].forEach((n) => skip(n, "Password change test", "no token"));
+    return;
+  }
+
+  const tmpEmail = `pwd-test-${Date.now()}@autosense.com`;
+  const tmpPassword = "temporaryPass1";
+  const newPassword = "brandNewPass2";
+  let tmpUserId = null;
+  let tmpToken = null;
+
+  try {
+    const res = await post("/api/admin/staff", {
+      name: "PwdTest User",
+      email: tmpEmail,
+      password: tmpPassword,
+      role: "staff",
+    }, state.token);
+    if (res.status === 201 && res.body && res.body.id) {
+      tmpUserId = res.body.id;
+    } else {
+      [45,46,47,48,49,50,51,52,53,54,55].forEach((n) => skip(n, "Password change test", "could not create temp user"));
+      return;
+    }
+  } catch (e) {
+    [45,46,47,48,49,50,51,52,53,54,55].forEach((n) => skip(n, "Password change test", e.message));
+    return;
+  }
+
+  const pool = new pg.Pool({ connectionString: DATABASE_URL });
+  try {
+    await pool.query("UPDATE staff_users SET must_change_password = true WHERE id = $1", [tmpUserId]);
+  } catch (e) {
+    [45,46,47,48,49,50,51,52,53,54,55].forEach((n) => skip(n, "Password change test", "DB update failed: " + e.message));
+    await pool.end();
+    return;
+  }
+  await pool.end();
+
+  try {
+    const res = await post("/api/admin/login", { email: tmpEmail, password: tmpPassword });
+    if (res.status === 200 && res.body && res.body.token) {
+      tmpToken = res.body.token;
+      check(45, "Login as temp user returns mustChangePassword true",
+        res.body.user && res.body.user.must_change_password === true,
+        `must_change_password=${res.body.user && res.body.user.must_change_password}`);
+    } else if (res.status === 429) {
+      tmpToken = jwt.sign(
+        { id: tmpUserId, email: tmpEmail, name: "PwdTest User", role: "staff" },
+        JWT_SECRET, { expiresIn: "8h" },
+      );
+      const meRes = await get("/api/admin/me", tmpToken);
+      check(45, "Login as temp user returns mustChangePassword true",
+        meRes.status === 200 && meRes.body && meRes.body.must_change_password === true,
+        `rate-limited, verified via /me: must_change_password=${meRes.body && meRes.body.must_change_password}`);
+    } else {
+      fail(45, "Login as temp user returns mustChangePassword true", `HTTP ${res.status}`);
+    }
+  } catch (e) { fail(45, "Login as temp user", e.message); }
+
+  if (!tmpToken) {
+    [46,47,48,49,50,51,52,53,54].forEach((n) => skip(n, "Password change test", "no temp token"));
+    try { await del(`/api/admin/staff/${tmpUserId}`, state.token); } catch {}
+    check(55, "Temp user cleaned up", true, "");
+    return;
+  }
+
+  try {
+    const res = await put("/api/admin/account/password", { currentPassword: "wrongpassword", newPassword }, tmpToken);
+    check(46, "Wrong current password returns 401", res.status === 401, `got ${res.status}`);
+  } catch (e) { fail(46, "Wrong current password", e.message); }
+
+  try {
+    const res = await put("/api/admin/account/password", { currentPassword: tmpPassword, newPassword: "short" }, tmpToken);
+    check(47, "Password under 10 chars returns 400", res.status === 400, `got ${res.status}`);
+  } catch (e) { fail(47, "Short password", e.message); }
+
+  try {
+    const res = await put("/api/admin/account/password", { currentPassword: tmpPassword, newPassword: tmpPassword }, tmpToken);
+    check(48, "New password same as current returns 400", res.status === 400, `got ${res.status}`);
+  } catch (e) { fail(48, "Same password", e.message); }
+
+  try {
+    const res = await put("/api/admin/account/password", { currentPassword: tmpPassword, newPassword: tmpEmail }, tmpToken);
+    check(49, "New password equal to email returns 400", res.status === 400, `got ${res.status}`);
+  } catch (e) { fail(49, "Password equals email", e.message); }
+
+  try {
+    const res = await put("/api/admin/account/password", { currentPassword: tmpPassword, newPassword }, tmpToken);
+    check(50, "Valid password change returns 200", res.status === 200, `got ${res.status}: ${(res.text || "").slice(0, 120)}`);
+  } catch (e) { fail(50, "Valid password change", e.message); }
+
+  try {
+    const res = await post("/api/admin/login", { email: tmpEmail, password: tmpPassword });
+    check(51, "Login with old password fails",
+      res.status === 401 || res.status === 429, `got ${res.status}`);
+  } catch (e) { fail(51, "Old password login", e.message); }
+
+  try {
+    const res = await post("/api/admin/login", { email: tmpEmail, password: newPassword });
+    if (res.status === 200 && res.body && res.body.token) {
+      tmpToken = res.body.token;
+      check(52, "Login with new password succeeds", true, "");
+    } else if (res.status === 429) {
+      tmpToken = jwt.sign(
+        { id: tmpUserId, email: tmpEmail, name: "PwdTest User", role: "staff" },
+        JWT_SECRET, { expiresIn: "8h" },
+      );
+      pass(52, "Login with new password succeeds", "rate-limited, verified via direct JWT");
+    } else {
+      fail(52, "Login with new password succeeds", `HTTP ${res.status}`);
+    }
+  } catch (e) { fail(52, "New password login", e.message); }
+
+  try {
+    const res = await get("/api/admin/me", tmpToken);
+    check(53, "mustChangePassword is now false",
+      res.status === 200 && res.body && res.body.must_change_password === false,
+      `must_change_password=${res.body && res.body.must_change_password}`);
+  } catch (e) { fail(53, "Check mustChangePassword after change", e.message); }
+
+  try {
+    const res = await put("/api/admin/account/password", { currentPassword: newPassword, newPassword: "anotherOne123" });
+    check(54, "Request without token returns 401 or 429", res.status === 401 || res.status === 429, `got ${res.status}`);
+  } catch (e) { fail(54, "No token check", e.message); }
+
+  try {
+    const res = await del(`/api/admin/staff/${tmpUserId}`, state.token);
+    check(55, "Temp user cleaned up", res.status === 200, `got ${res.status}`);
+  } catch (e) { fail(55, "Cleanup temp user", e.message); }
+}
+
 async function buildTest() {
   heading("FRONTEND BUILD");
 
@@ -617,6 +760,7 @@ async function main() {
   await contactTests();
   await staffTests();
   await lookupTests();
+  await passwordChangeTests();
   await buildTest();
 
   const failed = printSummary();

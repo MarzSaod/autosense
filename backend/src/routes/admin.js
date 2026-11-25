@@ -20,7 +20,7 @@ router.post("/login", async (req, res, next) => {
     const { email, password } = req.body;
 
     const { rows } = await query(
-      "SELECT id, name, email, password_hash, role FROM staff_users WHERE email = $1",
+      "SELECT id, name, email, password_hash, role, must_change_password FROM staff_users WHERE email = $1",
       [email]
     );
 
@@ -45,7 +45,13 @@ router.post("/login", async (req, res, next) => {
 
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        must_change_password: user.must_change_password,
+      },
     });
   } catch (error) {
     next(error);
@@ -56,13 +62,77 @@ router.post("/logout", auth, async (req, res) => {
   res.json({ message: "Logged out" });
 });
 
-router.get("/me", auth, async (req, res) => {
-  res.json({
-    id: req.user.id,
-    name: req.user.name,
-    email: req.user.email,
-    role: req.user.role,
-  });
+router.get("/me", auth, async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      "SELECT id, name, email, role, must_change_password FROM staff_users WHERE id = $1",
+      [req.user.id]
+    );
+    if (rows.length === 0) {
+      res.status(401).json({ error: "User not found" });
+      return;
+    }
+    const u = rows[0];
+    res.json({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      must_change_password: u.must_change_password,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put("/account/password", auth, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    const { rows } = await query(
+      "SELECT id, email, password_hash FROM staff_users WHERE id = $1",
+      [req.user.id]
+    );
+
+    if (rows.length === 0) {
+      res.status(401).json({ error: "User not found" });
+      return;
+    }
+
+    const user = rows[0];
+    const match = await bcrypt.compare(currentPassword || "", user.password_hash);
+
+    if (!match) {
+      res.status(401).json({ error: "Current password is incorrect." });
+      return;
+    }
+
+    if (!newPassword || newPassword.length < 10) {
+      res.status(400).json({ error: "New password must be at least 10 characters." });
+      return;
+    }
+
+    const same = await bcrypt.compare(newPassword, user.password_hash);
+    if (same) {
+      res.status(400).json({ error: "New password must be different from the current password." });
+      return;
+    }
+
+    if (newPassword === user.email) {
+      res.status(400).json({ error: "New password cannot be your email address." });
+      return;
+    }
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    await query(
+      "UPDATE staff_users SET password_hash = $1, must_change_password = false WHERE id = $2",
+      [hash, user.id]
+    );
+
+    res.json({ message: "Password updated successfully." });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/stats", auth, async (req, res, next) => {

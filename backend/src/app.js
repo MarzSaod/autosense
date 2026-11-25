@@ -51,6 +51,15 @@ app.use(
 
 app.use(express.json());
 
+const globalApiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests, please wait a moment and try again." },
+});
+app.use("/api", globalApiLimiter);
+
 app.get("/api/health", (req, res) => {
   // The shop clock is reported here so the timezone the deployed container is
   // actually using can be checked from outside, without shell access. A
@@ -86,6 +95,16 @@ const loginLimiter = rateLimit({
   message: { error: "Too many login attempts, please try again later." },
 });
 app.use("/api/admin/login", loginLimiter);
+
+const passwordChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many password change attempts, please try again later." },
+});
+app.use("/api/admin/account/password", passwordChangeLimiter);
+
 app.use("/api/admin", adminRouter);
 
 app.use((req, res) => {

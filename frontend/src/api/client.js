@@ -1,7 +1,5 @@
 export const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
-export const USE_MOCKS = false
-
 export async function getJson(path) {
   const response = await fetch(`${API_BASE_URL}${path}`)
   const payload = await response.json().catch(() => null)
@@ -54,11 +52,6 @@ export async function postJson(path, body) {
   }
 
   return payload
-}
-
-export function delay() {
-  const ms = 300 + Math.random() * 300
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function toCamelKey(key) {

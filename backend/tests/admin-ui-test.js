@@ -1,17 +1,26 @@
+import "dotenv/config";
 import { chromium } from "playwright";
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 
+const required = ["TEST_ADMIN_EMAIL", "TEST_ADMIN_PASSWORD", "JWT_SECRET", "DATABASE_URL"];
+for (const name of required) {
+  if (!process.env[name]) {
+    console.error(`Missing required environment variable: ${name}`);
+    process.exit(1);
+  }
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "../..");
 const BACKEND_DIR = resolve(ROOT, "backend");
 const FRONTEND_DIR = resolve(ROOT, "frontend");
-const BASE = "http://localhost:5173";
-const API = "http://localhost:4000";
-const ADMIN_EMAIL = "admin@autosense.com";
-const ADMIN_PASSWORD = "changeme123";
+const BASE = process.env.TEST_FRONTEND_URL || "http://localhost:5173";
+const API = process.env.TEST_API_URL || "http://localhost:4000";
+const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL;
+const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD;
 const SCREENSHOT_DIR = resolve(__dirname, "screenshots");
 
 const C = {
@@ -112,13 +121,13 @@ async function getToken() {
   if (res.status === 200 && res.body?.token) return res.body.token;
   const jwt = (await import("jsonwebtoken")).default;
   const pg = (await import("pg")).default;
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || "postgres://postgres:1q2w3e@localhost:5432/autosense" });
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   try {
     const { rows } = await pool.query("SELECT id, name, email, role FROM staff_users WHERE email = $1", [ADMIN_EMAIL]);
     if (rows.length === 0) throw new Error("admin user not found");
     const user = rows[0];
     return jwt.sign({ id: user.id, email: user.email, name: user.name, role: user.role },
-      process.env.JWT_SECRET || "dev-placeholder-change-in-production", { expiresIn: "8h" });
+      process.env.JWT_SECRET, { expiresIn: "8h" });
   } finally { await pool.end(); }
 }
 
@@ -235,7 +244,7 @@ async function main() {
 
     try {
       const pg = (await import("pg")).default;
-      const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || "postgres://postgres:1q2w3e@localhost:5432/autosense" });
+      const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
       await pool.query("DELETE FROM services WHERE name LIKE 'ZZZ Test%' OR name LIKE 'E2E Admin Test%'");
       await pool.end();
     } catch {}
@@ -422,7 +431,7 @@ async function main() {
 
     try {
       const pg = (await import("pg")).default;
-      const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || "postgres://postgres:1q2w3e@localhost:5432/autosense" });
+      const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
       await pool.query("DELETE FROM gallery_images WHERE caption LIKE 'ZZZ Test%'");
       await pool.end();
     } catch {}

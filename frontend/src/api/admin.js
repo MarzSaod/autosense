@@ -52,6 +52,10 @@ export async function getAdminUser() {
   return toCamel(data)
 }
 
+export async function changePassword(currentPassword, newPassword) {
+  return request('PUT', '/api/admin/account/password', { currentPassword, newPassword })
+}
+
 export async function getAdminStats() {
   const data = await request('GET', '/api/admin/stats')
   return toCamel(data)
