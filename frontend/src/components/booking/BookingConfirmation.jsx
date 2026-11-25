@@ -48,12 +48,19 @@ function BookingConfirmation({ confirmation, serviceNames, onBookAnother }) {
           out; otherwise point the customer at the details on this page. */}
       {confirmation.emailSent ? (
         <p className="text-slate">
-          We&apos;ve sent a confirmation to{' '}
+          We&apos;ve sent the details to{' '}
           <span className="font-bold text-navy">{confirmation.contact.email}</span>
         </p>
       ) : (
         <p className="text-slate">
-          Your booking details are below. Save your reference number for your records.
+          Keep your reference number. You can check your booking any time from the{' '}
+          <Link
+            to="/booking/status"
+            className="text-teal font-semibold hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2"
+          >
+            Check My Booking
+          </Link>{' '}
+          page.
         </p>
       )}
 
@@ -71,6 +78,15 @@ function BookingConfirmation({ confirmation, serviceNames, onBookAnother }) {
             Check My Booking
           </Link>
           .
+        </p>
+        <p className="text-sm text-muted">
+          You can check your booking status anytime.{' '}
+          <Link
+            to="/booking/status"
+            className="text-teal font-semibold hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal focus-visible:ring-offset-2"
+          >
+            Check booking status
+          </Link>
         </p>
         {serviceNames.length > 0 && (
           <div className="flex items-center justify-between gap-4">

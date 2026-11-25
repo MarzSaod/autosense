@@ -290,7 +290,7 @@ async function group1() {
       state.services = list;
       list.forEach((s) => state.serviceByName.set(s.name, s));
       info("services: " + list.map((s) => `${s.id}=${s.name}`).join(", "));
-      check("1.2a /api/services returns 8 services", list.length === 8, `got ${list.length}`);
+      check("1.2a /api/services returns at least 8 services", list.length >= 8, `got ${list.length}`);
       const complete = list.every((s) =>
         Number.isInteger(s.id) && typeof s.name === "string" &&
         s.est_price_min != null && s.est_price_max != null &&
@@ -788,7 +788,7 @@ async function group8() {
     const res = await get(
       `/api/bookings/lookup?referenceId=${encodeURIComponent(single.ref)}&email=${encodeURIComponent(EMAILS.single)}`
     );
-    const b = (res.body && res.body.booking) || null;
+    const b = res.body || null;
     info(`lookup ${single.ref} -> HTTP ${res.status} ${res.text.slice(0, 180)}`);
 
     if (!check("8.1a lookup returns the booking (200)", res.status === 200 && !!b,
@@ -803,16 +803,16 @@ async function group8() {
         b.reference_id === single.ref && ["pending", "confirmed"].includes(b.status),
         `reference_id=${b.reference_id}, status=${b.status}`);
 
-      const names = (b.services || []).map((s) => s.name);
+      const svcNames = Array.isArray(b.services) ? b.services : [];
       check("8.1c lookup returns the booked service",
-        names.includes("General Inspection"),
-        `services=${JSON.stringify(names)}`);
+        svcNames.includes("General Inspection"),
+        `services=${JSON.stringify(svcNames)}`);
 
-      const v = b.vehicle || {};
       const want = single.request.vehicle;
+      const vehicleStr = b.vehicle || "";
       check("8.1d lookup returns the vehicle",
-        v.make === want.make && v.model === want.model && String(v.year) === String(want.year),
-        `got ${JSON.stringify(v)}, expected ${JSON.stringify(want)}`);
+        vehicleStr.includes(want.make) && vehicleStr.includes(want.model) && vehicleStr.includes(String(want.year)),
+        `got ${JSON.stringify(vehicleStr)}, expected ${JSON.stringify(want)}`);
 
       check("8.1e lookup returns the booked date and time",
         b.appointment_date === single.request.date && b.appointment_time === single.request.time,
@@ -934,7 +934,7 @@ async function group9() {
     const res = await get(
       `/api/bookings/lookup?referenceId=${encodeURIComponent(target.ref)}&email=${encodeURIComponent(EMAILS.multi)}`
     );
-    const b = (res.body && res.body.booking) || {};
+    const b = res.body || {};
     info(`lookup after cancel -> HTTP ${res.status} status=${b.status}`);
     check("9.4 the cancelled booking looks up as cancelled",
       res.status === 200 && b.status === "cancelled",

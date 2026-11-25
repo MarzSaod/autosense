@@ -22,11 +22,13 @@ async function request(method, path, body) {
     if (response.status === 401) {
       localStorage.removeItem(TOKEN_KEY)
     }
-    throw new Error(
+    const err = new Error(
       response.status === 429
         ? 'Too many attempts. Please try again later.'
         : payload?.error || 'Something went wrong.',
     )
+    err.status = response.status
+    throw err
   }
   return payload
 }
@@ -41,7 +43,6 @@ export async function adminLogout() {
   try {
     await request('POST', '/api/admin/logout')
   } catch {
-    // ignore
   }
   localStorage.removeItem(TOKEN_KEY)
 }
@@ -81,6 +82,9 @@ export async function getAdminBookings(params = {}) {
   if (params.status) query.set('status', params.status)
   if (params.dateFrom) query.set('date_from', params.dateFrom)
   if (params.dateTo) query.set('date_to', params.dateTo)
+  if (params.q) query.set('q', params.q)
+  if (params.page) query.set('page', params.page)
+  if (params.limit) query.set('limit', params.limit)
   const qs = query.toString()
   const data = await request('GET', `/api/admin/bookings${qs ? `?${qs}` : ''}`)
   return toCamel(data)
@@ -109,4 +113,49 @@ export async function updateGalleryImage(id, data) {
 export async function deleteGalleryImage(id) {
   const result = await request('DELETE', `/api/admin/gallery/${id}`)
   return toCamel(result)
+}
+
+export async function getContactMessages(params = {}) {
+  const query = new URLSearchParams()
+  if (params.isRead !== undefined) query.set('is_read', params.isRead)
+  if (params.page) query.set('page', params.page)
+  if (params.limit) query.set('limit', params.limit)
+  const qs = query.toString()
+  const data = await request('GET', `/api/admin/contact-messages${qs ? `?${qs}` : ''}`)
+  return toCamel(data)
+}
+
+export async function updateContactMessage(id, data) {
+  const result = await request('PUT', `/api/admin/contact-messages/${id}`, data)
+  return toCamel(result)
+}
+
+export async function getStaff() {
+  const data = await request('GET', '/api/admin/staff')
+  return toCamel(data)
+}
+
+export async function createStaffUser(data) {
+  const result = await request('POST', '/api/admin/staff', data)
+  return toCamel(result)
+}
+
+export async function updateStaffUser(id, data) {
+  const result = await request('PUT', `/api/admin/staff/${id}`, data)
+  return toCamel(result)
+}
+
+export async function deleteStaffUser(id) {
+  const result = await request('DELETE', `/api/admin/staff/${id}`)
+  return toCamel(result)
+}
+
+export async function getChartData() {
+  const data = await request('GET', '/api/admin/stats/charts')
+  return toCamel(data)
+}
+
+export async function getActivity() {
+  const data = await request('GET', '/api/admin/activity')
+  return toCamel(data)
 }

@@ -5,8 +5,9 @@ import { Menu, Close } from '../components/ui/Icon.jsx'
 import Button from '../components/ui/Button.jsx'
 import { useAuth } from './AuthContext.jsx'
 import ProtectedRoute from './ProtectedRoute.jsx'
+import { getAdminStats } from '../api/admin.js'
 
-const navItems = [
+const baseNavItems = [
   { label: 'Dashboard', to: '/admin', end: true },
   { label: 'Services', to: '/admin/services' },
   { label: 'Bookings', to: '/admin/bookings' },
@@ -36,15 +37,28 @@ function AdminLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
 
   useEffect(() => {
     setMobileOpen(false)
+  }, [location.pathname])
+
+  useEffect(() => {
+    getAdminStats()
+      .then((s) => setUnreadCount(s.unreadMessages || 0))
+      .catch(() => {})
   }, [location.pathname])
 
   async function handleLogout() {
     await logout()
     navigate('/admin/login')
   }
+
+  const navItems = [
+    ...baseNavItems,
+    { label: 'Messages', to: '/admin/messages', badge: unreadCount },
+    ...(user?.role === 'admin' ? [{ label: 'Staff', to: '/admin/staff' }] : []),
+  ]
 
   return (
     <ProtectedRoute>
@@ -58,7 +72,14 @@ function AdminLayout() {
           <nav className="flex-1 flex flex-col gap-0.5 px-2">
             {navItems.map((item) => (
               <SidebarLink key={item.to} to={item.to} end={item.end}>
-                {item.label}
+                <span className="flex items-center justify-between">
+                  {item.label}
+                  {item.badge > 0 && (
+                    <span className="ml-2 inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-full bg-teal text-white text-xs font-semibold">
+                      {item.badge}
+                    </span>
+                  )}
+                </span>
               </SidebarLink>
             ))}
           </nav>
@@ -108,7 +129,14 @@ function AdminLayout() {
                 <nav className="flex flex-col gap-0.5 px-2 py-3">
                   {navItems.map((item) => (
                     <SidebarLink key={item.to} to={item.to} end={item.end}>
-                      {item.label}
+                      <span className="flex items-center justify-between">
+                        {item.label}
+                        {item.badge > 0 && (
+                          <span className="ml-2 inline-flex items-center justify-center h-5 min-w-5 px-1.5 rounded-full bg-teal text-white text-xs font-semibold">
+                            {item.badge}
+                          </span>
+                        )}
+                      </span>
                     </SidebarLink>
                   ))}
                 </nav>

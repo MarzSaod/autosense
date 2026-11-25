@@ -15,8 +15,8 @@ import {
   resolveDurationMinutes,
 } from "../lib/availabilityData.js";
 import {
-  isEmailConfigured,
   sendBookingConfirmation,
+  sendBookingStatusEmail,
 } from "../lib/emailService.js";
 
 const router = express.Router();
@@ -322,27 +322,35 @@ function readLookupParams(source) {
  * parts must match; 404 when they do not.
  */
 router.get("/lookup", lookupLimiter, async (req, res, next) => {
-  const params = readLookupParams(req.query || {});
+  const email = (req.query.email || "").trim();
+  const referenceId = (
+    req.query.reference_id || req.query.referenceId || ""
+  ).trim().toUpperCase();
 
-  if (!params.valid) {
-    res.status(400).json({ error: params.error, field: params.field });
+  if (!email || !referenceId) {
+    res.status(400).json({ error: "Email and reference ID are required" });
     return;
   }
 
   try {
-    const row = await loadBookingForCustomer(
-      params.valid.referenceId,
-      params.valid.email
-    );
+    const row = await loadBookingForCustomer(referenceId, email);
 
     if (!row) {
       res.status(404).json({
-        error: "No booking found with that reference number and email.",
+        message: "No booking found with that email and reference ID.",
       });
       return;
     }
 
-    res.json({ booking: serializeBooking(row) });
+    res.json({
+      reference_id: row.reference_id,
+      status: row.status,
+      appointment_date: row.appointment_date,
+      appointment_time: minutesToTime(timeToMinutes(row.appointment_time)),
+      vehicle: `${row.vehicle_year} ${row.vehicle_make} ${row.vehicle_model}`,
+      services: (row.services || []).map((s) => s.name),
+      created_at: row.created_at,
+    });
   } catch (error) {
     next(error);
   }
@@ -424,12 +432,18 @@ router.post("/cancel", lookupLimiter, async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    const emailSent = await sendBookingStatusEmail({
+      ...existing,
+      status: "cancelled",
+    });
+
     res.json({
       success: true,
       booking: {
         reference_id: updated[0].reference_id,
         status: updated[0].status,
       },
+      emailSent,
     });
   } catch (error) {
     try {
@@ -627,12 +641,7 @@ router.post("/", limiter, async (req, res, next) => {
 
     const appointmentTime = minutesToTime(timeToMinutes(row.appointment_time));
 
-    // Fire and forget, after the commit. The appointment is saved; the
-    // customer should not wait on an SMTP handshake to hear that, and a mail
-    // failure must not turn a successful booking into an error. sendBooking-
-    // Confirmation never rejects, but the catch keeps an unexpected throw from
-    // becoming an unhandled rejection.
-    sendBookingConfirmation({
+    const emailSent = await sendBookingConfirmation({
       referenceId: row.reference_id,
       fullName: booking.fullName,
       email: booking.email,
@@ -645,14 +654,8 @@ router.post("/", limiter, async (req, res, next) => {
         year: booking.year,
       },
       services: resolved.services.map((service) => ({ name: service.name })),
-    }).catch((error) => {
-      console.error("Booking confirmation email failed:", error.message);
     });
 
-    // Shaped so the frontend's snake_case -> camelCase conversion produces
-    // exactly the field names the confirmation screen already reads:
-    // referenceId, serviceIds, vehicle.{year,make,model}, contact.email,
-    // date and time.
     res.status(201).json({
       id: row.id,
       reference_id: row.reference_id,
@@ -674,14 +677,9 @@ router.post("/", limiter, async (req, res, next) => {
         phone: booking.phone,
       },
       date: row.appointment_date,
-      // Trim Postgres's "HH:MM:SS" back to the "HH:MM" the UI formats.
       time: appointmentTime,
       duration_minutes: row.duration_minutes,
-      // Whether a confirmation email is on its way, so the confirmation screen
-      // can say "we've emailed you" only when that is true. Reports whether
-      // mail is configured, not the eventual delivery result: the send is
-      // deliberately not awaited.
-      email_sent: isEmailConfigured(),
+      email_sent: emailSent,
       diagnosis_request_id: booking.diagnosisRequestId,
       created_at: row.created_at,
     });
